@@ -1,10 +1,8 @@
 "use server";
 
 import { z } from "zod";
-
-import { createUser, getUser } from "@/lib/db/queries";
-
-import { signIn } from "./auth";
+import { redirect } from "next/navigation";
+import { createFirebaseUser } from "@/lib/firebase/auth-helpers";
 
 const authFormSchema = z.object({
   email: z.string().email(),
@@ -13,6 +11,7 @@ const authFormSchema = z.object({
 
 export type LoginActionState = {
   status: "idle" | "in_progress" | "success" | "failed" | "invalid_data";
+  idToken?: string;
 };
 
 export const login = async (
@@ -25,13 +24,12 @@ export const login = async (
       password: formData.get("password"),
     });
 
-    await signIn("credentials", {
-      email: validatedData.email,
-      password: validatedData.password,
-      redirect: false,
-    });
-
-    return { status: "success" };
+    // Return the validated credentials to be used on the client side
+    // Firebase authentication happens on the client
+    return {
+      status: "success",
+      idToken: JSON.stringify(validatedData)
+    };
   } catch (error) {
     if (error instanceof z.ZodError) {
       return { status: "invalid_data" };
@@ -49,6 +47,7 @@ export type RegisterActionState = {
     | "failed"
     | "user_exists"
     | "invalid_data";
+  idToken?: string;
 };
 
 export const register = async (
@@ -61,19 +60,25 @@ export const register = async (
       password: formData.get("password"),
     });
 
-    const [user] = await getUser(validatedData.email);
+    // Create user in Firebase Auth and Firestore
+    const result = await createFirebaseUser(
+      validatedData.email,
+      validatedData.password
+    );
 
-    if (user) {
-      return { status: "user_exists" } as RegisterActionState;
+    if (!result.success) {
+      // Check if user already exists
+      if (result.error?.includes("already exists") || result.error?.includes("email-already-in-use")) {
+        return { status: "user_exists" } as RegisterActionState;
+      }
+      return { status: "failed" } as RegisterActionState;
     }
-    await createUser(validatedData.email, validatedData.password);
-    await signIn("credentials", {
-      email: validatedData.email,
-      password: validatedData.password,
-      redirect: false,
-    });
 
-    return { status: "success" };
+    // Return success and credentials for client-side login
+    return {
+      status: "success",
+      idToken: JSON.stringify(validatedData)
+    };
   } catch (error) {
     if (error instanceof z.ZodError) {
       return { status: "invalid_data" };
@@ -81,4 +86,8 @@ export const register = async (
 
     return { status: "failed" };
   }
+};
+
+export const signOut = async () => {
+  redirect("/login");
 };

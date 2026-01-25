@@ -2,8 +2,11 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useSession } from "next-auth/react";
+import { useSession } from "@/lib/firebase/session-provider";
 import { useActionState, useEffect, useState } from "react";
+import { signInWithEmailAndPassword } from "firebase/auth";
+import { auth } from "@/lib/firebase/client-config";
+
 import { AuthForm } from "@/components/auth-form";
 import { SubmitButton } from "@/components/submit-button";
 import { toast } from "@/components/toast";
@@ -35,14 +38,29 @@ export default function Page() {
         type: "error",
         description: "Failed validating your submission!",
       });
-    } else if (state.status === "success") {
+    } else if (state.status === "success" && state.idToken) {
       toast({ type: "success", description: "Account created successfully!" });
 
-      setIsSuccessful(true);
-      updateSession();
-      router.refresh();
+      // Parse credentials and sign in with Firebase
+      const credentials = JSON.parse(state.idToken);
+
+      signInWithEmailAndPassword(auth, credentials.email, credentials.password)
+        .then(async () => {
+          setIsSuccessful(true);
+          await updateSession();
+          router.push("/");
+          router.refresh();
+        })
+        .catch((error) => {
+          console.error("Firebase sign in error after registration:", error);
+          toast({
+            type: "error",
+            description: "Account created but failed to sign in. Please try logging in.",
+          });
+          router.push("/login");
+        });
     }
-  }, [state.status]);
+  }, [state.status, state.idToken]);
 
   const handleSubmit = (formData: FormData) => {
     setEmail(formData.get("email") as string);
