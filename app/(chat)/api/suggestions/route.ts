@@ -1,5 +1,5 @@
 import { auth } from "@/lib/firebase/auth";
-import { getSuggestionsByDocumentId } from "@/lib/db/queries";
+import { getSuggestionsByDocumentId } from "@/lib/firebase/queries";
 import { ChatSDKError } from "@/lib/errors";
 
 export async function GET(request: Request) {

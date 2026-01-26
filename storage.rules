@@ -1,0 +1,48 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isValidFileSize() {
+      // Maximum file size: 5MB
+      return request.resource.size <= 5 * 1024 * 1024;
+    }
+
+    function isValidImageType() {
+      return request.resource.contentType.matches('image/.*');
+    }
+
+    // User-specific uploads
+    // Path format: uploads/{userId}/{filename}
+    match /uploads/{userId}/{filename} {
+      // Allow reading if user owns the file or if making authenticated request
+      // (for shared files in chats)
+      allow read: if isAuthenticated();
+
+      // Allow creating if user owns the path and file is valid
+      allow create: if isOwner(userId)
+        && isValidFileSize()
+        && isValidImageType();
+
+      // Allow deleting if user owns the file
+      allow delete: if isOwner(userId);
+
+      // Disallow updates to prevent file tampering
+      allow update: if false;
+    }
+
+    // Public files (if needed in the future)
+    match /public/{allPaths=**} {
+      allow read: if true;
+      allow write: if false;
+    }
+  }
+}

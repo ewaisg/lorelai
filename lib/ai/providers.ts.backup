@@ -1,0 +1,126 @@
+import { gateway } from "@ai-sdk/gateway";
+import { createOpenAI } from "@ai-sdk/openai";
+import {
+  customProvider,
+  extractReasoningMiddleware,
+  wrapLanguageModel,
+} from "ai";
+import { isTestEnvironment } from "../constants";
+
+const THINKING_SUFFIX_REGEX = /-thinking$/;
+
+// Azure OpenAI configuration
+const AZURE_OPENAI_API_KEY = process.env.AZURE_OPENAI_API_KEY;
+const AZURE_OPENAI_ENDPOINT = process.env.AZURE_OPENAI_ENDPOINT;
+
+// Check if Azure OpenAI is configured (primary option)
+const isAzureConfigured = !!(AZURE_OPENAI_API_KEY && AZURE_OPENAI_ENDPOINT);
+
+// Initialize Azure OpenAI client if configured
+const azureOpenAI = isAzureConfigured
+  ? createOpenAI({
+      apiKey: AZURE_OPENAI_API_KEY,
+      baseURL: `${AZURE_OPENAI_ENDPOINT}/openai/v1`,
+      headers: {
+        "api-key": AZURE_OPENAI_API_KEY,
+      },
+    })
+  : null;
+
+export const myProvider = isTestEnvironment
+  ? (() => {
+      const {
+        artifactModel,
+        chatModel,
+        reasoningModel,
+        titleModel,
+      } = require("./models.mock");
+      return customProvider({
+        languageModels: {
+          "chat-model": chatModel,
+          "chat-model-reasoning": reasoningModel,
+          "title-model": titleModel,
+          "artifact-model": artifactModel,
+        },
+      });
+    })()
+  : null;
+
+/**
+ * Get language model based on configuration priority:
+ * 1. Test environment mock models
+ * 2. Azure OpenAI (if configured) - PRIMARY
+ * 3. Vercel AI Gateway (fallback)
+ */
+export function getLanguageModel(modelId: string) {
+  if (isTestEnvironment && myProvider) {
+    return myProvider.languageModel(modelId);
+  }
+
+  const isReasoningModel =
+    modelId.includes("reasoning") || modelId.endsWith("-thinking");
+
+  // Azure OpenAI (primary)
+  if (azureOpenAI) {
+    // For Azure, we need to extract just the model/deployment name
+    // If modelId is in format "provider/model", extract just "model"
+    const azureModelId = modelId.includes("/")
+      ? modelId.split("/")[1]
+      : modelId;
+
+    // Remove thinking suffix for Azure
+    const cleanModelId = azureModelId.replace(THINKING_SUFFIX_REGEX, "");
+
+    if (isReasoningModel) {
+      return wrapLanguageModel({
+        model: azureOpenAI(cleanModelId),
+        middleware: extractReasoningMiddleware({ tagName: "thinking" }),
+      });
+    }
+
+    return azureOpenAI(cleanModelId);
+  }
+
+  // Vercel AI Gateway (fallback)
+  if (isReasoningModel) {
+    const gatewayModelId = modelId.replace(THINKING_SUFFIX_REGEX, "");
+
+    return wrapLanguageModel({
+      model: gateway.languageModel(gatewayModelId),
+      middleware: extractReasoningMiddleware({ tagName: "thinking" }),
+    });
+  }
+
+  return gateway.languageModel(modelId);
+}
+
+export function getTitleModel() {
+  if (isTestEnvironment && myProvider) {
+    return myProvider.languageModel("title-model");
+  }
+
+  // Azure OpenAI (primary) - use a fast model for titles
+  if (azureOpenAI) {
+    // Use gpt-4o-mini or gpt-35-turbo for title generation
+    // User should deploy this model in Azure with name matching their deployment
+    return azureOpenAI("gpt-4o-mini");
+  }
+
+  // Vercel AI Gateway (fallback)
+  return gateway.languageModel("google/gemini-2.5-flash-lite");
+}
+
+export function getArtifactModel() {
+  if (isTestEnvironment && myProvider) {
+    return myProvider.languageModel("artifact-model");
+  }
+
+  // Azure OpenAI (primary) - use a capable model for artifacts
+  if (azureOpenAI) {
+    // Use gpt-4o or claude model deployed in Azure
+    return azureOpenAI("gpt-4o");
+  }
+
+  // Vercel AI Gateway (fallback)
+  return gateway.languageModel("anthropic/claude-haiku-4.5");
+}

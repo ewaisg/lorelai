@@ -1,8 +1,8 @@
 import { Output, streamText, tool, type UIMessageStreamWriter } from "ai";
 import type { FirebaseSession as Session } from "@/lib/firebase/types";
 import { z } from "zod";
-import { getDocumentById, saveSuggestions } from "@/lib/db/queries";
-import type { Suggestion } from "@/lib/db/schema";
+import { getDocumentById, saveSuggestions } from "@/lib/firebase/queries";
+import type { Suggestion } from "@/lib/firebase/queries";
 import type { ChatMessage } from "@/lib/types";
 import { generateUUID } from "@/lib/utils";
 import { getArtifactModel } from "../providers";
@@ -41,7 +41,7 @@ export const requestSuggestions = ({
       >[] = [];
 
       const { partialOutputStream } = streamText({
-        model: getArtifactModel(),
+        model: await getArtifactModel(session.user.id),
         system:
           "You are a help writing assistant. Given a piece of writing, please offer suggestions to improve the piece of writing and describe the change. It is very important for the edits to contain full sentences instead of just words. Max 5 suggestions.",
         prompt: document.content,

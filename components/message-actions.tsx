@@ -3,7 +3,7 @@ import { memo } from "react";
 import { toast } from "sonner";
 import { useSWRConfig } from "swr";
 import { useCopyToClipboard } from "usehooks-ts";
-import type { Vote } from "@/lib/db/schema";
+import type { Vote } from "@/lib/firebase/queries";
 import type { ChatMessage } from "@/lib/types";
 import { Action, Actions } from "./elements/actions";
 import { CopyIcon, PencilEditIcon, ThumbDownIcon, ThumbUpIcon } from "./icons";
@@ -106,6 +106,7 @@ export function PureMessageActions({
                       chatId,
                       messageId: message.id,
                       isUpvoted: true,
+                      createdAt: new Date(),
                     },
                   ];
                 },
@@ -155,6 +156,7 @@ export function PureMessageActions({
                       chatId,
                       messageId: message.id,
                       isUpvoted: false,
+                      createdAt: new Date(),
                     },
                   ];
                 },

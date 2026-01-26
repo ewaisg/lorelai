@@ -1,5 +1,5 @@
 import { auth } from "@/lib/firebase/auth";
-import { getChatById, getVotesByChatId, voteMessage } from "@/lib/db/queries";
+import { getChatById, getVotesByChatId, voteMessage } from "@/lib/firebase/queries";
 import { ChatSDKError } from "@/lib/errors";
 
 export async function GET(request: Request) {

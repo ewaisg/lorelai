@@ -28,10 +28,11 @@ import {
   ModelSelectorTrigger,
 } from "@/components/ai-elements/model-selector";
 import {
-  chatModels,
+  chatModels as fallbackChatModels,
   DEFAULT_CHAT_MODEL,
-  modelsByProvider,
+  modelsByProvider as fallbackModelsByProvider,
 } from "@/lib/ai/models";
+import { useUserModels } from "@/hooks/use-user-models";
 import type { Attachment, ChatMessage } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import {
@@ -469,21 +470,46 @@ function PureModelSelectorCompact({
   onModelChange?: (modelId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const { models: userModels, modelsByProvider: userModelsByProvider, loading } = useUserModels();
+
+  // Use user models if available, otherwise fall back to hardcoded models
+  const chatModels = userModels.length > 0 ? userModels : fallbackChatModels;
+  const modelsByProvider = userModels.length > 0 ? userModelsByProvider : fallbackModelsByProvider;
 
   const selectedModel =
     chatModels.find((m) => m.id === selectedModelId) ??
     chatModels.find((m) => m.id === DEFAULT_CHAT_MODEL) ??
     chatModels[0];
-  const [provider] = selectedModel.id.split("/");
 
-  // Provider display names
+  // Extract provider from model for logo
+  const provider = selectedModel?.provider || selectedModel?.id?.split("/")[0] || "";
+
+  // Provider display names for fallback models
   const providerNames: Record<string, string> = {
     anthropic: "Anthropic",
     openai: "OpenAI",
     google: "Google",
     xai: "xAI",
     reasoning: "Reasoning",
+    "azure-openai": "Azure OpenAI",
+    custom: "Custom",
   };
+
+  if (loading) {
+    return (
+      <Button className="h-8 w-[200px] justify-between px-2" variant="ghost" disabled>
+        <span className="text-sm text-muted-foreground">Loading models...</span>
+      </Button>
+    );
+  }
+
+  if (!selectedModel) {
+    return (
+      <Button className="h-8 w-[200px] justify-between px-2" variant="ghost" disabled>
+        <span className="text-sm text-muted-foreground">No models</span>
+      </Button>
+    );
+  }
 
   return (
     <ModelSelector onOpenChange={setOpen} open={open}>
@@ -497,33 +523,41 @@ function PureModelSelectorCompact({
         <ModelSelectorInput placeholder="Search models..." />
         <ModelSelectorList>
           {Object.entries(modelsByProvider).map(
-            ([providerKey, providerModels]) => (
-              <ModelSelectorGroup
-                heading={providerNames[providerKey] ?? providerKey}
-                key={providerKey}
-              >
-                {providerModels.map((model) => {
-                  const logoProvider = model.id.split("/")[0];
-                  return (
-                    <ModelSelectorItem
-                      key={model.id}
-                      onSelect={() => {
-                        onModelChange?.(model.id);
-                        setCookie("chat-model", model.id);
-                        setOpen(false);
-                      }}
-                      value={model.id}
-                    >
-                      <ModelSelectorLogo provider={logoProvider} />
-                      <ModelSelectorName>{model.name}</ModelSelectorName>
-                      {model.id === selectedModel.id && (
-                        <CheckIcon className="ml-auto size-4" />
-                      )}
-                    </ModelSelectorItem>
-                  );
-                })}
-              </ModelSelectorGroup>
-            )
+            ([providerKey, providerModels]) => {
+              // For user models, providerKey is the provider name (e.g., "My Azure OpenAI")
+              // For fallback models, providerKey is the provider type (e.g., "anthropic")
+              const heading = userModels.length > 0
+                ? providerKey
+                : (providerNames[providerKey] ?? providerKey);
+
+              return (
+                <ModelSelectorGroup
+                  heading={heading}
+                  key={providerKey}
+                >
+                  {providerModels.map((model) => {
+                    const logoProvider = model.provider || model.id.split("/")[0];
+                    return (
+                      <ModelSelectorItem
+                        key={model.id}
+                        onSelect={() => {
+                          onModelChange?.(model.id);
+                          setCookie("chat-model", model.id);
+                          setOpen(false);
+                        }}
+                        value={model.id}
+                      >
+                        <ModelSelectorLogo provider={logoProvider} />
+                        <ModelSelectorName>{model.name}</ModelSelectorName>
+                        {model.id === selectedModel.id && (
+                          <CheckIcon className="ml-auto size-4" />
+                        )}
+                      </ModelSelectorItem>
+                    );
+                  })}
+                </ModelSelectorGroup>
+              );
+            }
           )}
         </ModelSelectorList>
       </ModelSelectorContent>

@@ -1,7 +1,7 @@
 "use client";
 import type { UseChatHelpers } from "@ai-sdk/react";
 import { useState } from "react";
-import type { Vote } from "@/lib/db/schema";
+import type { Vote } from "@/lib/firebase/queries";
 import type { ChatMessage } from "@/lib/types";
 import { cn, sanitizeText } from "@/lib/utils";
 import { useDataStream } from "./data-stream-provider";
@@ -156,6 +156,7 @@ const PurePreviewMessage = ({
                     <div className="min-w-0 flex-1">
                       <MessageEditor
                         key={message.id}
+                        chatId={chatId}
                         message={message}
                         regenerate={regenerate}
                         setMessages={setMessages}

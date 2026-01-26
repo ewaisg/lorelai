@@ -1,0 +1,11 @@
+{
+  "firestore": {
+    "rules": "firestore.rules"
+  },
+  "storage": [
+    {
+      "bucket": "oakaiapp.firebasestorage.app",
+      "rules": "storage.rules"
+    }
+  ]
+}

@@ -9,7 +9,7 @@ import {
   deleteMessagesByChatIdAfterTimestamp,
   getMessageById,
   updateChatVisibilityById,
-} from "@/lib/db/queries";
+} from "@/lib/firebase/queries";
 import { getTextFromMessage } from "@/lib/utils";
 
 export async function saveChatModelAsCookie(model: string) {
@@ -19,11 +19,13 @@ export async function saveChatModelAsCookie(model: string) {
 
 export async function generateTitleFromUserMessage({
   message,
+  userId,
 }: {
   message: UIMessage;
+  userId?: string;
 }) {
   const { text } = await generateText({
-    model: getTitleModel(),
+    model: await getTitleModel(userId),
     system: titlePrompt,
     prompt: getTextFromMessage(message),
   });
@@ -33,8 +35,18 @@ export async function generateTitleFromUserMessage({
     .trim();
 }
 
-export async function deleteTrailingMessages({ id }: { id: string }) {
-  const [message] = await getMessageById({ id });
+export async function deleteTrailingMessages({
+  chatId,
+  messageId
+}: {
+  chatId: string;
+  messageId: string;
+}) {
+  const message = await getMessageById({ chatId, messageId });
+
+  if (!message) {
+    throw new Error('Message not found');
+  }
 
   await deleteMessagesByChatIdAfterTimestamp({
     chatId: message.chatId,

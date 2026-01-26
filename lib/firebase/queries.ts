@@ -5,6 +5,55 @@ import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import type { ArtifactKind } from '@/components/artifact';
 
 // ========================================
+// Type Definitions
+// ========================================
+
+export type DBMessage = {
+  id: string;
+  chatId: string;
+  role: string;
+  parts: any;
+  attachments: any;
+  createdAt: Date;
+};
+
+export type Chat = {
+  id: string;
+  userId: string;
+  title: string;
+  visibility: 'public' | 'private';
+  createdAt: Date;
+};
+
+export type Document = {
+  id: string;
+  userId: string;
+  title: string;
+  content: string;
+  kind: ArtifactKind;
+  createdAt: Date;
+};
+
+export type Suggestion = {
+  id: string;
+  documentId: string;
+  documentCreatedAt: Date;
+  originalText: string;
+  suggestedText: string;
+  description: string | null;
+  isResolved: boolean;
+  userId: string;
+  createdAt: Date;
+};
+
+export type Vote = {
+  messageId: string;
+  chatId: string;
+  isUpvoted: boolean;
+  createdAt: Date;
+};
+
+// ========================================
 // User Operations
 // ========================================
 
@@ -76,7 +125,7 @@ export async function saveChat({
   }
 }
 
-export async function getChatById(id: string) {
+export async function getChatById({ id }: { id: string }): Promise<Chat | null> {
   try {
     const chatDoc = await adminDb.collection('chats').doc(id).get();
 
@@ -87,7 +136,9 @@ export async function getChatById(id: string) {
     const data = chatDoc.data();
     return {
       id: chatDoc.id,
-      ...data,
+      userId: data?.userId as string,
+      title: data?.title as string,
+      visibility: data?.visibility as 'public' | 'private',
       createdAt: data?.createdAt?.toDate?.() || new Date(),
     };
   } catch (error) {
@@ -253,16 +304,15 @@ export async function updateChatTitleById({
 // ========================================
 
 export async function saveMessages({
-  chatId,
   messages,
 }: {
-  chatId: string;
-  messages: any[];
+  messages: DBMessage[];
 }) {
   try {
     const batch = adminDb.batch();
 
     messages.forEach((message) => {
+      const { chatId, ...messageData } = message;
       const messageRef = adminDb
         .collection('chats')
         .doc(chatId)
@@ -270,7 +320,7 @@ export async function saveMessages({
         .doc(message.id);
 
       batch.set(messageRef, {
-        ...message,
+        ...messageData,
         createdAt: FieldValue.serverTimestamp(),
       });
     });
@@ -284,20 +334,26 @@ export async function saveMessages({
 }
 
 export async function updateMessage({
-  chatId,
-  messageId,
+  id,
   parts,
+  chatId,
 }: {
-  chatId: string;
-  messageId: string;
+  id: string;
   parts: any;
+  chatId?: string;
 }) {
   try {
+    // If chatId is not provided, we need to find the message to get its chatId
+    // For now, we require chatId to be passed for efficiency
+    if (!chatId) {
+      throw new Error('chatId is required for updateMessage');
+    }
+
     await adminDb
       .collection('chats')
       .doc(chatId)
       .collection('messages')
-      .doc(messageId)
+      .doc(id)
       .update({ parts });
 
     return { success: true };
@@ -307,7 +363,7 @@ export async function updateMessage({
   }
 }
 
-export async function getMessagesByChatId({ id }: { id: string }) {
+export async function getMessagesByChatId({ id }: { id: string }): Promise<DBMessage[]> {
   try {
     const messagesSnapshot = await adminDb
       .collection('chats')
@@ -320,7 +376,10 @@ export async function getMessagesByChatId({ id }: { id: string }) {
       const data = doc.data();
       return {
         id: doc.id,
-        ...data,
+        chatId: id,
+        role: data.role as string,
+        parts: data.parts,
+        attachments: data.attachments || [],
         createdAt: data.createdAt?.toDate?.() || new Date(),
       };
     });
@@ -346,6 +405,7 @@ export async function getMessageById({ chatId, messageId }: { chatId: string; me
     const data = messageDoc.data();
     return {
       id: messageDoc.id,
+      chatId: chatId,
       ...data,
       createdAt: data?.createdAt?.toDate?.() || new Date(),
     };
@@ -534,7 +594,7 @@ export async function saveDocument({
   }
 }
 
-export async function getDocumentsById({ id }: { id: string }) {
+export async function getDocumentsById({ id }: { id: string }): Promise<Document[]> {
   try {
     const documentsSnapshot = await adminDb
       .collection('documents')
@@ -546,7 +606,10 @@ export async function getDocumentsById({ id }: { id: string }) {
       const data = doc.data();
       return {
         id: doc.id,
-        ...data,
+        userId: data.userId as string,
+        title: data.title as string,
+        content: data.content as string,
+        kind: data.kind as ArtifactKind,
         createdAt: data.createdAt?.toDate?.() || new Date(),
       };
     });
@@ -556,7 +619,7 @@ export async function getDocumentsById({ id }: { id: string }) {
   }
 }
 
-export async function getDocumentById({ id }: { id: string }) {
+export async function getDocumentById({ id }: { id: string }): Promise<Document | null> {
   try {
     const docSnapshot = await adminDb.collection('documents').doc(id).get();
 
@@ -567,7 +630,10 @@ export async function getDocumentById({ id }: { id: string }) {
     const data = docSnapshot.data();
     return {
       id: docSnapshot.id,
-      ...data,
+      userId: data?.userId || '',
+      title: data?.title || '',
+      content: data?.content || '',
+      kind: data?.kind || 'text',
       createdAt: data?.createdAt?.toDate?.() || new Date(),
     };
   } catch (error) {
@@ -661,7 +727,7 @@ export async function getSuggestionsByDocumentId({
   documentId,
 }: {
   documentId: string;
-}) {
+}): Promise<Suggestion[]> {
   try {
     const suggestionsSnapshot = await adminDb
       .collection('documents')
@@ -673,7 +739,13 @@ export async function getSuggestionsByDocumentId({
       const data = doc.data();
       return {
         id: doc.id,
-        ...data,
+        documentId: data.documentId as string,
+        documentCreatedAt: data.documentCreatedAt?.toDate?.() || new Date(),
+        originalText: data.originalText as string,
+        suggestedText: data.suggestedText as string,
+        description: data.description || null,
+        isResolved: data.isResolved || false,
+        userId: data.userId as string,
         createdAt: data.createdAt?.toDate?.() || new Date(),
       };
     });

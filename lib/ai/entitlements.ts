@@ -1,4 +1,4 @@
-import type { UserType } from "@/app/(auth)/auth";
+import type { UserType } from "@/lib/firebase/types";
 
 type Entitlements = {
   maxMessagesPerDay: number;

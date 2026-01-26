@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useSession } from "@/lib/firebase/session-provider";
-import { useActionState, useEffect, useState } from "react";
+import { useActionState, useEffect, useState, Suspense } from "react";
 import { signInWithEmailAndPassword } from "firebase/auth";
 import { auth } from "@/lib/firebase/client-config";
 
@@ -12,7 +12,7 @@ import { SubmitButton } from "@/components/submit-button";
 import { toast } from "@/components/toast";
 import { type LoginActionState, login } from "../actions";
 
-export default function Page() {
+function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -112,5 +112,13 @@ export default function Page() {
         </AuthForm>
       </div>
     </div>
+  );
+}
+
+export default function Page() {
+  return (
+    <Suspense fallback={<div className="flex h-dvh w-screen items-center justify-center">Loading...</div>}>
+      <LoginForm />
+    </Suspense>
   );
 }

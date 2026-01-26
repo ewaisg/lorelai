@@ -1,8 +1,8 @@
-import { put } from "@vercel/blob";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { auth } from "@/lib/firebase/auth";
+import { uploadFileToFirebase } from "@/lib/firebase/storage-helpers";
 
 // Use Blob instead of File since File is not available in Node.js environment
 const FileSchema = z.object({
@@ -48,14 +48,27 @@ export async function POST(request: Request) {
 
     // Get filename from formData since Blob doesn't have name property
     const filename = (formData.get("file") as File).name;
-    const fileBuffer = await file.arrayBuffer();
+    const fileBuffer = Buffer.from(await file.arrayBuffer());
 
     try {
-      const data = await put(`${filename}`, fileBuffer, {
-        access: "public",
-      });
+      const result = await uploadFileToFirebase(
+        fileBuffer,
+        filename,
+        file.type,
+        session.user.id
+      );
 
-      return NextResponse.json(data);
+      if ("error" in result) {
+        return NextResponse.json({ error: result.error }, { status: 500 });
+      }
+
+      // Return format compatible with Vercel Blob for backwards compatibility
+      return NextResponse.json({
+        url: result.url,
+        pathname: result.path,
+        contentType: file.type,
+        contentDisposition: `attachment; filename="${filename}"`,
+      });
     } catch (_error) {
       return NextResponse.json({ error: "Upload failed" }, { status: 500 });
     }

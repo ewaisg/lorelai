@@ -16,6 +16,7 @@ import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
 
 export type MessageEditorProps = {
+  chatId: string;
   message: ChatMessage;
   setMode: Dispatch<SetStateAction<"view" | "edit">>;
   setMessages: UseChatHelpers<ChatMessage>["setMessages"];
@@ -23,6 +24,7 @@ export type MessageEditorProps = {
 };
 
 export function MessageEditor({
+  chatId,
   message,
   setMode,
   setMessages,
@@ -81,7 +83,8 @@ export function MessageEditor({
             setIsSubmitting(true);
 
             await deleteTrailingMessages({
-              id: message.id,
+              chatId,
+              messageId: message.id,
             });
 
             setMessages((messages) => {

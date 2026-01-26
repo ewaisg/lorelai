@@ -6,7 +6,7 @@ import { auth } from "@/lib/firebase/auth";
 import { Chat } from "@/components/chat";
 import { DataStreamHandler } from "@/components/data-stream-handler";
 import { DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
-import { getChatById, getMessagesByChatId } from "@/lib/db/queries";
+import { getChatById, getMessagesByChatId } from "@/lib/firebase/queries";
 import { convertToUIMessages } from "@/lib/utils";
 
 export default function Page(props: { params: Promise<{ id: string }> }) {

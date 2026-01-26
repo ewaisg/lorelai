@@ -28,8 +28,8 @@ import {
   saveMessages,
   updateChatTitleById,
   updateMessage,
-} from "@/lib/db/queries";
-import type { DBMessage } from "@/lib/db/schema";
+} from "@/lib/firebase/queries";
+import type { DBMessage } from "@/lib/firebase/queries";
 import { ChatSDKError } from "@/lib/errors";
 import type { ChatMessage } from "@/lib/types";
 import { convertToUIMessages, generateUUID } from "@/lib/utils";
@@ -99,7 +99,7 @@ export async function POST(request: Request) {
         title: "New chat",
         visibility: selectedVisibilityType,
       });
-      titlePromise = generateTitleFromUserMessage({ message });
+      titlePromise = generateTitleFromUserMessage({ message, userId: session.user.id });
     }
 
     const uiMessages = isToolApprovalFlow
@@ -140,7 +140,7 @@ export async function POST(request: Request) {
       originalMessages: isToolApprovalFlow ? uiMessages : undefined,
       execute: async ({ writer: dataStream }) => {
         const result = streamText({
-          model: getLanguageModel(selectedChatModel),
+          model: await getLanguageModel(selectedChatModel, session.user.id),
           system: systemPrompt({ selectedChatModel, requestHints }),
           messages: modelMessages,
           stopWhen: stepCountIs(5),
@@ -188,6 +188,7 @@ export async function POST(request: Request) {
               await updateMessage({
                 id: finishedMsg.id,
                 parts: finishedMsg.parts,
+                chatId: id,
               });
             } else {
               await saveMessages({

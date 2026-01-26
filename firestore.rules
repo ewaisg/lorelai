@@ -1,0 +1,177 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isValidChat() {
+      return request.resource.data.keys().hasAll(['userId', 'title', 'visibility', 'createdAt'])
+        && request.resource.data.userId is string
+        && request.resource.data.title is string
+        && request.resource.data.visibility in ['public', 'private']
+        && request.resource.data.createdAt is timestamp;
+    }
+
+    function isValidMessage() {
+      return request.resource.data.keys().hasAll(['chatId', 'role', 'parts', 'createdAt'])
+        && request.resource.data.chatId is string
+        && request.resource.data.role in ['user', 'assistant', 'system']
+        && request.resource.data.parts is list
+        && request.resource.data.createdAt is timestamp;
+    }
+
+    // Users collection
+    match /users/{userId} {
+      // Users can only read and write their own data
+      allow read, write: if isOwner(userId);
+    }
+
+    // Chats collection
+    match /chats/{chatId} {
+      // Allow reading if:
+      // 1. User owns the chat, OR
+      // 2. Chat is public
+      allow read: if isOwner(resource.data.userId)
+        || resource.data.visibility == 'public';
+
+      // Allow creating if authenticated and valid data and user owns it
+      allow create: if isAuthenticated()
+        && isValidChat()
+        && isOwner(request.resource.data.userId);
+
+      // Allow updating/deleting only if user owns the chat
+      allow update, delete: if isOwner(resource.data.userId);
+    }
+
+    // Messages subcollection under chats
+    match /chats/{chatId}/messages/{messageId} {
+      // Check if user owns the parent chat
+      function ownsChat() {
+        return isAuthenticated()
+          && get(/databases/$(database)/documents/chats/$(chatId)).data.userId == request.auth.uid;
+      }
+
+      // Allow reading if user owns the chat or chat is public
+      allow read: if ownsChat()
+        || get(/databases/$(database)/documents/chats/$(chatId)).data.visibility == 'public';
+
+      // Allow creating if user owns the chat and valid message data
+      allow create: if ownsChat() && isValidMessage();
+
+      // Allow updating/deleting if user owns the chat
+      allow update, delete: if ownsChat();
+    }
+
+    // Votes subcollection under chats
+    match /chats/{chatId}/votes/{voteId} {
+      // Check if user owns the parent chat
+      function ownsChat() {
+        return isAuthenticated()
+          && get(/databases/$(database)/documents/chats/$(chatId)).data.userId == request.auth.uid;
+      }
+
+      // Allow reading/writing if user owns the chat
+      allow read, create, update: if ownsChat();
+
+      // Disallow deleting votes for data integrity
+      allow delete: if false;
+    }
+
+    // Streams subcollection under chats (for resumable streams)
+    match /chats/{chatId}/streams/{streamId} {
+      // Check if user owns the parent chat
+      function ownsChat() {
+        return isAuthenticated()
+          && get(/databases/$(database)/documents/chats/$(chatId)).data.userId == request.auth.uid;
+      }
+
+      // Allow reading/writing if user owns the chat
+      allow read, write: if ownsChat();
+    }
+
+    // Documents (artifacts) collection
+    match /documents/{documentId} {
+      // Allow reading if user owns the document
+      allow read: if isOwner(resource.data.userId);
+
+      // Allow creating if authenticated and user owns it
+      allow create: if isAuthenticated()
+        && isOwner(request.resource.data.userId);
+
+      // Allow updating/deleting if user owns the document
+      allow update, delete: if isOwner(resource.data.userId);
+
+      // Suggestions subcollection under documents
+      match /suggestions/{suggestionId} {
+        // Check if user owns the parent document
+        function ownsDocument() {
+          return isAuthenticated()
+            && get(/databases/$(database)/documents/documents/$(documentId)).data.userId == request.auth.uid;
+        }
+
+        // Allow reading if user owns the document
+        allow read: if ownsDocument();
+
+        // Allow creating if user owns the document
+        allow create: if ownsDocument();
+
+        // Allow updating/deleting if user owns the document
+        allow update, delete: if ownsDocument();
+      }
+    }
+
+    // User Providers collection (AI provider configurations)
+    match /userProviders/{providerId} {
+      // Allow reading if user owns the provider
+      allow read: if isOwner(resource.data.userId);
+
+      // Allow creating if authenticated and user owns it
+      allow create: if isAuthenticated()
+        && isOwner(request.resource.data.userId)
+        && request.resource.data.keys().hasAll(['userId', 'name', 'type', 'enabled', 'config', 'createdAt', 'updatedAt'])
+        && request.resource.data.type in ['azure-openai', 'openai', 'anthropic', 'google', 'custom'];
+
+      // Allow updating if user owns the provider
+      allow update: if isOwner(resource.data.userId);
+
+      // Allow deleting if user owns the provider
+      allow delete: if isOwner(resource.data.userId);
+    }
+
+    // User Models collection (model configurations)
+    match /userModels/{modelId} {
+      // Allow reading if user owns the model
+      allow read: if isOwner(resource.data.userId);
+
+      // Allow creating if authenticated and user owns it
+      allow create: if isAuthenticated()
+        && isOwner(request.resource.data.userId)
+        && request.resource.data.keys().hasAll(['userId', 'providerId', 'modelId', 'name', 'enabled', 'createdAt', 'updatedAt']);
+
+      // Allow updating if user owns the model
+      allow update: if isOwner(resource.data.userId);
+
+      // Allow deleting if user owns the model
+      allow delete: if isOwner(resource.data.userId);
+    }
+
+    // User Settings collection (user preferences)
+    match /userSettings/{userId} {
+      // Allow reading if it's the user's own settings
+      allow read: if isOwner(userId);
+
+      // Allow creating/updating if it's the user's own settings
+      allow create, update: if isOwner(userId);
+
+      // Disallow deleting settings for data integrity
+      allow delete: if false;
+    }
+  }
+}

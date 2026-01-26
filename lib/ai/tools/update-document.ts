@@ -2,7 +2,7 @@ import { tool, type UIMessageStreamWriter } from "ai";
 import type { FirebaseSession as Session } from "@/lib/firebase/types";
 import { z } from "zod";
 import { documentHandlersByArtifactKind } from "@/lib/artifacts/server";
-import { getDocumentById } from "@/lib/db/queries";
+import { getDocumentById } from "@/lib/firebase/queries";
 import type { ChatMessage } from "@/lib/types";
 
 type UpdateDocumentProps = {
