@@ -45,9 +45,14 @@ function initializeProvider(provider: AIProvider): any {
       if (!config.azureEndpoint || !config.azureApiKey) {
         throw new Error(`Azure OpenAI provider ${provider.name} missing endpoint or API key`);
       }
+
+      // Use OpenAI SDK configured for Azure
+      // This supports the traditional Azure OpenAI API with date-based versions
+      const endpoint = config.azureEndpoint.replace(/\/$/, '');
+
       return createOpenAI({
         apiKey: config.azureApiKey,
-        baseURL: `${config.azureEndpoint}/openai/${config.azureApiVersion || 'v1'}`,
+        baseURL: `${endpoint}/openai/deployments`,
         headers: {
           'api-key': config.azureApiKey,
         },
@@ -134,15 +139,62 @@ export async function getUserLanguageModel(userId: string, modelId: string) {
     throw new Error(`Model ${modelId} not found or not enabled`);
   }
 
+  // Get provider details to check type
+  const providers = await getUserProviders(userId);
+  const provider = providers.find((p) => p.id === model.providerId);
+
+  if (!provider) {
+    throw new Error(`Provider ${model.providerId} not found`);
+  }
+
+  // For Azure, create a model-specific instance
+  if (provider.type === 'azure-openai') {
+    const endpoint = provider.config.azureEndpoint?.replace(/\/$/, '') || '';
+    const deploymentName = model.deploymentName || model.modelId;
+
+    // Check if this is Azure AI Foundry format (.openai.azure.com)
+    const isAIFoundry = endpoint.includes('.openai.azure.com');
+
+    if (isAIFoundry) {
+      // Azure AI Foundry format: https://resource.openai.azure.com/openai/v1/
+      // No api-version needed, deployment name passed as model parameter
+      const baseURL = endpoint.includes('/openai/v1')
+        ? endpoint
+        : `${endpoint}/openai/v1/`;
+
+      const azureProvider = createOpenAI({
+        apiKey: provider.config.azureApiKey!,
+        baseURL,
+      });
+
+      // Pass deployment name as the model parameter
+      // Model settings (maxTokens, temperature) are applied in the actual API calls (streamText, generateText)
+      return azureProvider(deploymentName);
+    } else {
+      // Traditional Azure OpenAI format: https://resource.cognitiveservices.azure.com
+      // Requires api-version in URL and deployment in path
+      const apiVersion = provider.config.azureApiVersion || '2024-08-01-preview';
+      const baseURLWithVersion = `${endpoint}/openai/deployments/${deploymentName}?api-version=${apiVersion}`;
+
+      const azureProvider = createOpenAI({
+        apiKey: provider.config.azureApiKey!,
+        baseURL: baseURLWithVersion,
+        headers: {
+          'api-key': provider.config.azureApiKey!,
+        },
+      });
+
+      // Empty string as model name since deployment is in the URL
+      return azureProvider('');
+    }
+  }
+
+  // For non-Azure providers, use the cached provider instance
   const providerInstance = await getProviderInstance(userId, model.providerId);
+  const actualModelId = model.modelId;
 
-  // For Azure, use deployment name if specified
-  const actualModelId = model.deploymentName || model.modelId;
-
-  return providerInstance(actualModelId, {
-    ...(model.maxTokens && { maxTokens: model.maxTokens }),
-    ...(model.temperature && { temperature: model.temperature }),
-  });
+  // Model settings (maxTokens, temperature) are applied in the actual API calls (streamText, generateText)
+  return providerInstance(actualModelId);
 }
 
 /**

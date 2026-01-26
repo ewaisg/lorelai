@@ -22,6 +22,7 @@ import {
 import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
 import type { AIProvider, ProviderType } from '@/lib/firebase/user-settings-types';
+import { parseAzureTargetURI, isAzureTargetURI } from '@/lib/azure-uri-parser';
 
 interface ProviderDialogProps {
   open: boolean;
@@ -31,6 +32,8 @@ interface ProviderDialogProps {
 
 export function ProviderDialog({ open, onClose, provider }: ProviderDialogProps) {
   const [loading, setLoading] = useState(false);
+  const [targetUri, setTargetUri] = useState('');
+  const [extractedDeployment, setExtractedDeployment] = useState('');
   const [formData, setFormData] = useState({
     name: '',
     type: 'azure-openai' as ProviderType,
@@ -46,6 +49,33 @@ export function ProviderDialog({ open, onClose, provider }: ProviderDialogProps)
     customEndpoint: '',
     customApiKey: '',
   });
+
+  // Parse Target URI when it changes
+  const handleTargetUriChange = (uri: string) => {
+    setTargetUri(uri);
+
+    if (!uri.trim()) {
+      setExtractedDeployment('');
+      return;
+    }
+
+    if (isAzureTargetURI(uri)) {
+      const parsed = parseAzureTargetURI(uri);
+      if (parsed) {
+        setFormData({
+          ...formData,
+          azureEndpoint: parsed.endpoint,
+          azureApiVersion: parsed.apiVersion,
+        });
+        setExtractedDeployment(parsed.deploymentName);
+        toast.success('Target URI parsed successfully');
+      } else {
+        toast.error('Failed to parse Target URI');
+      }
+    } else if (uri.trim().length > 10) {
+      toast.error('Invalid Azure Target URI format');
+    }
+  };
 
   useEffect(() => {
     if (provider) {
@@ -64,6 +94,8 @@ export function ProviderDialog({ open, onClose, provider }: ProviderDialogProps)
         customEndpoint: provider.config.customEndpoint || '',
         customApiKey: provider.config.customApiKey || '',
       });
+      setTargetUri('');
+      setExtractedDeployment('');
     } else {
       // Reset form for new provider
       setFormData({
@@ -81,6 +113,8 @@ export function ProviderDialog({ open, onClose, provider }: ProviderDialogProps)
         customEndpoint: '',
         customApiKey: '',
       });
+      setTargetUri('');
+      setExtractedDeployment('');
     }
   }, [provider, open]);
 
@@ -133,7 +167,36 @@ export function ProviderDialog({ open, onClose, provider }: ProviderDialogProps)
       }
 
       if (response.ok) {
+        const savedProvider = await response.json();
         toast.success(provider ? 'Provider updated' : 'Provider created');
+
+        // Automatically create a model if deployment name was extracted from Target URI
+        if (!provider && extractedDeployment && savedProvider.id) {
+          try {
+            const modelPayload = {
+              providerId: savedProvider.id,
+              modelId: extractedDeployment,
+              name: extractedDeployment,
+              deploymentName: extractedDeployment,
+              enabled: true,
+              description: 'Auto-created from Target URI',
+            };
+
+            const modelResponse = await fetch('/api/models', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(modelPayload),
+            });
+
+            if (modelResponse.ok) {
+              toast.success(`Model "${extractedDeployment}" created automatically`);
+            }
+          } catch (modelError) {
+            console.error('Failed to auto-create model:', modelError);
+            // Don't show error to user, provider was created successfully
+          }
+        }
+
         onClose(true);
       } else {
         const error = await response.json();
@@ -204,11 +267,34 @@ export function ProviderDialog({ open, onClose, provider }: ProviderDialogProps)
             {/* Azure OpenAI Fields */}
             {formData.type === 'azure-openai' && (
               <>
+                <div className="space-y-2 rounded-md border border-blue-200 bg-blue-50 p-4 dark:border-blue-800 dark:bg-blue-950">
+                  <Label htmlFor="targetUri" className="text-base font-semibold">
+                    Quick Setup: Paste Target URI (Optional)
+                  </Label>
+                  <p className="text-sm text-muted-foreground">
+                    Paste the Target URI from Azure AI Foundry to automatically extract endpoint, API version, and deployment name
+                  </p>
+                  <Input
+                    id="targetUri"
+                    placeholder="https://resource.cognitiveservices.azure.com/openai/deployments/deployment-name/chat/completions?api-version=2024-05-01-preview"
+                    value={targetUri}
+                    onChange={(e) => handleTargetUriChange(e.target.value)}
+                    className="font-mono text-xs"
+                  />
+                  {extractedDeployment && (
+                    <div className="mt-2 rounded-md bg-green-100 p-2 text-sm text-green-800 dark:bg-green-900 dark:text-green-200">
+                      ✓ Extracted deployment: <strong>{extractedDeployment}</strong>
+                      <br />
+                      <span className="text-xs">A model will be automatically created after saving the provider</span>
+                    </div>
+                  )}
+                </div>
+
                 <div className="space-y-2">
                   <Label htmlFor="azureEndpoint">Azure Endpoint</Label>
                   <Input
                     id="azureEndpoint"
-                    placeholder="https://your-resource.openai.azure.com"
+                    placeholder="https://your-resource.cognitiveservices.azure.com"
                     value={formData.azureEndpoint}
                     onChange={(e) =>
                       setFormData({ ...formData, azureEndpoint: e.target.value })

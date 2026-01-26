@@ -5,6 +5,24 @@ import { FieldValue } from 'firebase-admin/firestore';
 import type { AIProvider, UserModel, UserSettings } from './user-settings-types';
 
 // ========================================
+// Helper Functions
+// ========================================
+
+/**
+ * Remove undefined values from an object for Firestore compatibility
+ * Firestore doesn't accept undefined values, so we filter them out
+ */
+function removeUndefined<T extends Record<string, any>>(obj: T): Partial<T> {
+  const result: Partial<T> = {};
+  for (const key in obj) {
+    if (obj[key] !== undefined) {
+      result[key] = obj[key];
+    }
+  }
+  return result;
+}
+
+// ========================================
 // AI Provider Operations
 // ========================================
 
@@ -54,11 +72,13 @@ export async function getProviderById(providerId: string): Promise<AIProvider | 
 
 export async function createProvider(provider: Omit<AIProvider, 'id' | 'createdAt' | 'updatedAt'>): Promise<string> {
   try {
-    const docRef = await adminDb.collection('userProviders').add({
+    const providerData = removeUndefined({
       ...provider,
       createdAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
     });
+
+    const docRef = await adminDb.collection('userProviders').add(providerData);
 
     return docRef.id;
   } catch (error) {
@@ -69,10 +89,12 @@ export async function createProvider(provider: Omit<AIProvider, 'id' | 'createdA
 
 export async function updateProvider(providerId: string, updates: Partial<AIProvider>): Promise<void> {
   try {
-    await adminDb.collection('userProviders').doc(providerId).update({
+    const updateData = removeUndefined({
       ...updates,
       updatedAt: FieldValue.serverTimestamp(),
     });
+
+    await adminDb.collection('userProviders').doc(providerId).update(updateData);
   } catch (error) {
     console.error('Failed to update provider:', error);
     throw new Error('Failed to update provider');
@@ -176,11 +198,13 @@ export async function getModelById(modelId: string): Promise<UserModel | null> {
 
 export async function createModel(model: Omit<UserModel, 'id' | 'createdAt' | 'updatedAt'>): Promise<string> {
   try {
-    const docRef = await adminDb.collection('userModels').add({
+    const modelData = removeUndefined({
       ...model,
       createdAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
     });
+
+    const docRef = await adminDb.collection('userModels').add(modelData);
 
     return docRef.id;
   } catch (error) {
@@ -191,10 +215,12 @@ export async function createModel(model: Omit<UserModel, 'id' | 'createdAt' | 'u
 
 export async function updateModel(modelId: string, updates: Partial<UserModel>): Promise<void> {
   try {
-    await adminDb.collection('userModels').doc(modelId).update({
+    const updateData = removeUndefined({
       ...updates,
       updatedAt: FieldValue.serverTimestamp(),
     });
+
+    await adminDb.collection('userModels').doc(modelId).update(updateData);
   } catch (error) {
     console.error('Failed to update model:', error);
     throw new Error('Failed to update model');
@@ -252,14 +278,13 @@ export async function getUserSettings(userId: string): Promise<UserSettings | nu
 
 export async function updateUserSettings(userId: string, settings: Partial<UserSettings>): Promise<void> {
   try {
-    await adminDb.collection('userSettings').doc(userId).set(
-      {
-        ...settings,
-        userId,
-        updatedAt: FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    );
+    const settingsData = removeUndefined({
+      ...settings,
+      userId,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    await adminDb.collection('userSettings').doc(userId).set(settingsData, { merge: true });
   } catch (error) {
     console.error('Failed to update user settings:', error);
     throw new Error('Failed to update user settings');

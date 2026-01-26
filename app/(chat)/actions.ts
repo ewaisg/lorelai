@@ -1,16 +1,17 @@
 "use server";
 
-import { generateText, type UIMessage } from "ai";
 import { cookies } from "next/headers";
 import type { VisibilityType } from "@/components/visibility-selector";
 import { titlePrompt } from "@/lib/ai/prompts";
 import { getTitleModel } from "@/lib/ai/providers";
+import { generateFoundryText } from "@/lib/azure-foundry/streaming";
 import {
   deleteMessagesByChatIdAfterTimestamp,
   getMessageById,
   updateChatVisibilityById,
 } from "@/lib/firebase/queries";
 import { getTextFromMessage } from "@/lib/utils";
+import type { ChatMessage } from "@/lib/types";
 
 export async function saveChatModelAsCookie(model: string) {
   const cookieStore = await cookies();
@@ -21,14 +22,39 @@ export async function generateTitleFromUserMessage({
   message,
   userId,
 }: {
-  message: UIMessage;
+  message: ChatMessage;
   userId?: string;
 }) {
-  const { text } = await generateText({
-    model: await getTitleModel(userId),
-    system: titlePrompt,
-    prompt: getTextFromMessage(message),
-  });
+  // Get the Foundry model (returns { client, deployment })
+  const model = await getTitleModel(userId);
+
+  // Extract Foundry client if available
+  const foundryClient = (model as any).__foundryClient;
+  const foundryDeployment = (model as any).__foundryDeployment;
+
+  let text: string;
+
+  if (foundryClient && foundryDeployment) {
+    // Use native OpenAI SDK via Foundry
+    const result = await generateFoundryText({
+      client: foundryClient,
+      deployment: foundryDeployment,
+      messages: [{ role: "user", content: getTextFromMessage(message) }],
+      system: titlePrompt,
+    });
+    text = result.text;
+  } else {
+    // Fallback to legacy model system
+    // This uses Vercel AI SDK temporarily until all users migrate
+    const { generateText } = await import("ai");
+    const result = await generateText({
+      model,
+      system: titlePrompt,
+      prompt: getTextFromMessage(message),
+    });
+    text = result.text;
+  }
+
   return text
     .replace(/^[#*"\s]+/, "")
     .replace(/["]+$/, "")

@@ -1,4 +1,3 @@
-import { gateway } from "@ai-sdk/gateway";
 import { createOpenAI } from "@ai-sdk/openai";
 import {
   customProvider,
@@ -6,18 +5,28 @@ import {
   wrapLanguageModel,
 } from "ai";
 import { isTestEnvironment } from "../constants";
-import { getUserLanguageModel, getUserAIModels, getDefaultModel } from "./dynamic-providers";
+import {
+  getUserLanguageModel,
+  getUserAIModels,
+  getDefaultModel,
+} from "./dynamic-providers";
+import {
+  getFoundryLanguageModel,
+  getFoundryTitleModel,
+  getFoundryArtifactModel,
+  hasFoundryProject,
+} from "@/lib/azure-foundry/model-provider";
 
 const THINKING_SUFFIX_REGEX = /-thinking$/;
 
-// Azure OpenAI configuration
+// Azure OpenAI configuration (legacy fallback)
 const AZURE_OPENAI_API_KEY = process.env.AZURE_OPENAI_API_KEY;
 const AZURE_OPENAI_ENDPOINT = process.env.AZURE_OPENAI_ENDPOINT;
 
-// Check if Azure OpenAI is configured (primary option)
+// Check if Azure OpenAI is configured (legacy fallback option)
 const isAzureConfigured = !!(AZURE_OPENAI_API_KEY && AZURE_OPENAI_ENDPOINT);
 
-// Initialize Azure OpenAI client if configured
+// Initialize Azure OpenAI client if configured (legacy fallback)
 const azureOpenAI = isAzureConfigured
   ? createOpenAI({
       apiKey: AZURE_OPENAI_API_KEY,
@@ -50,9 +59,10 @@ export const myProvider = isTestEnvironment
 /**
  * Get language model based on configuration priority:
  * 1. Test environment mock models
- * 2. User's configured models from Firestore (PRIMARY)
- * 3. Azure OpenAI from .env (fallback)
- * 4. Vercel AI Gateway (fallback)
+ * 2. User's Azure AI Foundry project (NEW - PRIMARY)
+ * 3. User's configured models from Firestore (OLD - deprecated)
+ * 4. Azure OpenAI from .env (fallback)
+ * 5. Error if no models available
  */
 export async function getLanguageModel(modelId: string, userId?: string) {
   if (isTestEnvironment && myProvider) {
@@ -62,7 +72,44 @@ export async function getLanguageModel(modelId: string, userId?: string) {
   const isReasoningModel =
     modelId.includes("reasoning") || modelId.endsWith("-thinking");
 
-  // Try to load from user's configured models (PRIMARY)
+  // NEW: Try Azure AI Foundry first (if user has a project configured)
+  if (userId) {
+    try {
+      const hasFoundry = await hasFoundryProject(userId);
+
+      if (hasFoundry) {
+        // User has Foundry project - use it
+        const { client, deployment } = await getFoundryLanguageModel(
+          userId,
+          modelId
+        );
+
+        // Create a compatibility wrapper for Vercel AI SDK
+        // This allows existing streamText() calls to work until Phase 3
+        const foundryModel = createOpenAI({
+          apiKey: "foundry", // Placeholder - actual auth handled by Foundry client
+        })(deployment);
+
+        // Inject the actual Foundry client for use in Phase 3+
+        (foundryModel as any).__foundryClient = client;
+        (foundryModel as any).__foundryDeployment = deployment;
+
+        if (isReasoningModel) {
+          return wrapLanguageModel({
+            model: foundryModel,
+            middleware: extractReasoningMiddleware({ tagName: "thinking" }),
+          });
+        }
+
+        return foundryModel;
+      }
+    } catch (error) {
+      console.error("Failed to load Foundry model:", error);
+      // Fall through to old system
+    }
+  }
+
+  // OLD: Try to load from user's configured models (DEPRECATED)
   if (userId) {
     try {
       const model = await getUserLanguageModel(userId, modelId);
@@ -76,20 +123,24 @@ export async function getLanguageModel(modelId: string, userId?: string) {
 
       return model;
     } catch (error) {
-      console.warn(`Failed to load user model ${modelId}, falling back:`, error);
-      // Fall through to fallback options
+      // If user has models configured but this specific one failed, throw error
+      const userModels = await getUserAIModels(userId);
+      if (userModels.length > 0) {
+        throw new Error(
+          `Model not found. Please select a valid model from your configured models in Settings.`
+        );
+      }
+
+      console.warn(`No user models configured, checking fallback options`);
     }
   }
 
-  // Fallback to Azure OpenAI from .env
+  // Fallback to Azure OpenAI from .env (only if user has no configured models)
   if (azureOpenAI) {
-    // For Azure, we need to extract just the model/deployment name
-    // If modelId is in format "provider/model", extract just "model"
     const azureModelId = modelId.includes("/")
       ? modelId.split("/")[1]
       : modelId;
 
-    // Remove thinking suffix for Azure
     const cleanModelId = azureModelId.replace(THINKING_SUFFIX_REGEX, "");
 
     if (isReasoningModel) {
@@ -102,17 +153,9 @@ export async function getLanguageModel(modelId: string, userId?: string) {
     return azureOpenAI(cleanModelId);
   }
 
-  // Vercel AI Gateway (final fallback)
-  if (isReasoningModel) {
-    const gatewayModelId = modelId.replace(THINKING_SUFFIX_REGEX, "");
-
-    return wrapLanguageModel({
-      model: gateway.languageModel(gatewayModelId),
-      middleware: extractReasoningMiddleware({ tagName: "thinking" }),
-    });
-  }
-
-  return gateway.languageModel(modelId);
+  throw new Error(
+    `No AI models configured. Please add an Azure AI Foundry project in Settings, or configure AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT in your environment.`
+  );
 }
 
 export async function getTitleModel(userId?: string) {
@@ -120,22 +163,48 @@ export async function getTitleModel(userId?: string) {
     return myProvider.languageModel("title-model");
   }
 
-  // Try to use user's first available fast model
+  // NEW: Try Azure AI Foundry first
+  if (userId) {
+    try {
+      const hasFoundry = await hasFoundryProject(userId);
+
+      if (hasFoundry) {
+        const { client, deployment } = await getFoundryTitleModel(userId);
+
+        const foundryModel = createOpenAI({
+          apiKey: "foundry",
+        })(deployment);
+
+        (foundryModel as any).__foundryClient = client;
+        (foundryModel as any).__foundryDeployment = deployment;
+
+        return foundryModel;
+      }
+    } catch (error) {
+      console.error("Failed to load Foundry title model:", error);
+    }
+  }
+
+  // OLD: Try to use user's first available fast model (DEPRECATED)
   if (userId) {
     try {
       const models = await getUserAIModels(userId);
-      // Try to find a fast/mini model for title generation
-      const fastModel = models.find(m =>
-        m.modelId.toLowerCase().includes('mini') ||
-        m.modelId.toLowerCase().includes('flash') ||
-        m.modelId.toLowerCase().includes('turbo')
-      ) || models[0];
+      const fastModel =
+        models.find(
+          (m) =>
+            m.modelId.toLowerCase().includes("mini") ||
+            m.modelId.toLowerCase().includes("flash") ||
+            m.modelId.toLowerCase().includes("turbo")
+        ) || models[0];
 
       if (fastModel) {
         return await getUserLanguageModel(userId, fastModel.id);
       }
     } catch (error) {
-      console.warn('Failed to load user model for titles, falling back:', error);
+      console.warn(
+        "Failed to load user model for titles, checking fallback:",
+        error
+      );
     }
   }
 
@@ -144,8 +213,9 @@ export async function getTitleModel(userId?: string) {
     return azureOpenAI("gpt-4o-mini");
   }
 
-  // Vercel AI Gateway (final fallback)
-  return gateway.languageModel("google/gemini-2.5-flash-lite");
+  throw new Error(
+    `No AI models configured for title generation. Please add an Azure AI Foundry project in Settings.`
+  );
 }
 
 export async function getArtifactModel(userId?: string) {
@@ -153,7 +223,29 @@ export async function getArtifactModel(userId?: string) {
     return myProvider.languageModel("artifact-model");
   }
 
-  // Try to use user's default or first available capable model
+  // NEW: Try Azure AI Foundry first
+  if (userId) {
+    try {
+      const hasFoundry = await hasFoundryProject(userId);
+
+      if (hasFoundry) {
+        const { client, deployment } = await getFoundryArtifactModel(userId);
+
+        const foundryModel = createOpenAI({
+          apiKey: "foundry",
+        })(deployment);
+
+        (foundryModel as any).__foundryClient = client;
+        (foundryModel as any).__foundryDeployment = deployment;
+
+        return foundryModel;
+      }
+    } catch (error) {
+      console.error("Failed to load Foundry artifact model:", error);
+    }
+  }
+
+  // OLD: Try to use user's default or first available capable model (DEPRECATED)
   if (userId) {
     try {
       const defaultModel = await getDefaultModel(userId);
@@ -162,7 +254,10 @@ export async function getArtifactModel(userId?: string) {
         return await getUserLanguageModel(userId, defaultModel.id);
       }
     } catch (error) {
-      console.warn('Failed to load user model for artifacts, falling back:', error);
+      console.warn(
+        "Failed to load user model for artifacts, checking fallback:",
+        error
+      );
     }
   }
 
@@ -171,6 +266,7 @@ export async function getArtifactModel(userId?: string) {
     return azureOpenAI("gpt-4o");
   }
 
-  // Vercel AI Gateway (final fallback)
-  return gateway.languageModel("anthropic/claude-haiku-4.5");
+  throw new Error(
+    `No AI models configured for artifacts. Please add an Azure AI Foundry project in Settings.`
+  );
 }

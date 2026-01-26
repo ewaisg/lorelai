@@ -9,7 +9,7 @@ export async function middleware(request: NextRequest) {
   const isPublicRoute = publicRoutes.some(route => pathname.startsWith(route));
 
   // Check for session cookie
-  const sessionCookie = request.cookies.get('session');
+  const sessionCookie = request.cookies.get('firebase_session');
 
   // If accessing a protected route without session, redirect to login
   if (!isPublicRoute && !sessionCookie) {

@@ -96,6 +96,7 @@ export const requestSuggestions = ({
         const userId = session.user.id;
 
         await saveSuggestions({
+          documentId,
           suggestions: suggestions.map((suggestion) => ({
             ...suggestion,
             userId,

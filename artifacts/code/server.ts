@@ -1,7 +1,7 @@
-import { streamObject } from "ai";
 import { z } from "zod";
 import { codePrompt, updateDocumentPrompt } from "@/lib/ai/prompts";
 import { getArtifactModel } from "@/lib/ai/providers";
+import { streamFoundryObject } from "@/lib/azure-foundry/streaming";
 import { createDocumentHandler } from "@/lib/artifacts/server";
 
 export const codeDocumentHandler = createDocumentHandler<"code">({
@@ -9,30 +9,59 @@ export const codeDocumentHandler = createDocumentHandler<"code">({
   onCreateDocument: async ({ title, dataStream, session }) => {
     let draftContent = "";
 
-    const { fullStream } = streamObject({
-      model: await getArtifactModel(session.user.id),
-      system: codePrompt,
-      prompt: title,
-      schema: z.object({
-        code: z.string(),
-      }),
-    });
+    const model = await getArtifactModel(session.user.id);
+    const foundryClient = (model as any).__foundryClient;
+    const foundryDeployment = (model as any).__foundryDeployment;
 
-    for await (const delta of fullStream) {
-      const { type } = delta;
+    if (foundryClient && foundryDeployment) {
+      // Use native OpenAI SDK via Foundry
+      const stream = streamFoundryObject<{ code: string }>({
+        client: foundryClient,
+        deployment: foundryDeployment,
+        system: codePrompt,
+        prompt: title,
+      });
 
-      if (type === "object") {
-        const { object } = delta;
-        const { code } = object;
+      for await (const delta of stream) {
+        if (delta.type === "object") {
+          const { code } = delta.object;
 
-        if (code) {
-          dataStream.write({
-            type: "data-codeDelta",
-            data: code ?? "",
-            transient: true,
-          });
+          if (code) {
+            dataStream.write({
+              type: "data-codeDelta",
+              data: code,
+              transient: true,
+            });
 
-          draftContent = code;
+            draftContent = code;
+          }
+        }
+      }
+    } else {
+      // Fallback to legacy Vercel AI SDK
+      const { streamObject } = await import("ai");
+      const { fullStream } = streamObject({
+        model,
+        system: codePrompt,
+        prompt: title,
+        schema: z.object({
+          code: z.string(),
+        }),
+      });
+
+      for await (const delta of fullStream) {
+        if (delta.type === "object") {
+          const { code } = (delta as any).object;
+
+          if (code) {
+            dataStream.write({
+              type: "data-codeDelta",
+              data: code ?? "",
+              transient: true,
+            });
+
+            draftContent = code;
+          }
         }
       }
     }
@@ -42,30 +71,59 @@ export const codeDocumentHandler = createDocumentHandler<"code">({
   onUpdateDocument: async ({ document, description, dataStream, session }) => {
     let draftContent = "";
 
-    const { fullStream } = streamObject({
-      model: await getArtifactModel(session.user.id),
-      system: updateDocumentPrompt(document.content, "code"),
-      prompt: description,
-      schema: z.object({
-        code: z.string(),
-      }),
-    });
+    const model = await getArtifactModel(session.user.id);
+    const foundryClient = (model as any).__foundryClient;
+    const foundryDeployment = (model as any).__foundryDeployment;
 
-    for await (const delta of fullStream) {
-      const { type } = delta;
+    if (foundryClient && foundryDeployment) {
+      // Use native OpenAI SDK via Foundry
+      const stream = streamFoundryObject<{ code: string }>({
+        client: foundryClient,
+        deployment: foundryDeployment,
+        system: updateDocumentPrompt(document.content, "code"),
+        prompt: description,
+      });
 
-      if (type === "object") {
-        const { object } = delta;
-        const { code } = object;
+      for await (const delta of stream) {
+        if (delta.type === "object") {
+          const { code } = delta.object;
 
-        if (code) {
-          dataStream.write({
-            type: "data-codeDelta",
-            data: code ?? "",
-            transient: true,
-          });
+          if (code) {
+            dataStream.write({
+              type: "data-codeDelta",
+              data: code,
+              transient: true,
+            });
 
-          draftContent = code;
+            draftContent = code;
+          }
+        }
+      }
+    } else {
+      // Fallback to legacy Vercel AI SDK
+      const { streamObject } = await import("ai");
+      const { fullStream } = streamObject({
+        model,
+        system: updateDocumentPrompt(document.content, "code"),
+        prompt: description,
+        schema: z.object({
+          code: z.string(),
+        }),
+      });
+
+      for await (const delta of fullStream) {
+        if (delta.type === "object") {
+          const { code } = (delta as any).object;
+
+          if (code) {
+            dataStream.write({
+              type: "data-codeDelta",
+              data: code ?? "",
+              transient: true,
+            });
+
+            draftContent = code;
+          }
         }
       }
     }
