@@ -1,5 +1,4 @@
 import { geolocation } from "@vercel/functions";
-import { generateId } from "ai";
 import { after } from "next/server";
 import { createResumableStreamContext } from "resumable-stream";
 import { auth, type UserType } from "@/lib/firebase/auth";
@@ -194,13 +193,9 @@ export async function POST(request: Request) {
       );
     }
 
-    const foundryClient = (model as any).__foundryClient;
-    const foundryDeployment = (model as any).__foundryDeployment;
+    const { client: foundryClient, deployment: foundryDeployment } = model as any;
 
-    // Check if we should use Foundry or fall back to Vercel SDK
-    const useFoundry = Boolean(foundryClient && foundryDeployment);
-
-    if (useFoundry) {
+    if (foundryClient && foundryDeployment) {
       // USE NEW FOUNDRY STREAMING
       const stream = createFoundryUIMessageStream({
         originalMessages: isToolApprovalFlow ? uiMessages : undefined,
@@ -311,21 +306,16 @@ export async function POST(request: Request) {
                   const existing = currentToolCalls.get(index);
 
                   if (toolCall.id) {
-                    // New tool call
                     currentToolCalls.set(index, {
                       id: toolCall.id,
                       name: toolCall.function?.name || "",
                       arguments: toolCall.function?.arguments || "",
                     });
                   } else if (existing && toolCall.function?.arguments) {
-                    // Append arguments to existing tool call
                     existing.arguments += toolCall.function.arguments;
                   }
                 }
               }
-
-              // Handle finish with tool calls
-              // (Tool execution will happen after the stream completes)
             }
 
             // Execute tools if the model requested them
@@ -336,19 +326,16 @@ export async function POST(request: Request) {
                 content: string;
               }> = [];
 
-              // Execute each tool
               for (const [_, toolCall] of currentToolCalls) {
                 try {
                   let result: any;
                   const args = JSON.parse(toolCall.arguments);
 
-                  // Create context object for tool execution
                   const toolContext = {
                     abortSignal: undefined,
                     messages: uiMessages,
                   };
 
-                  // Wrap dataStream to match UIMessageStreamWriter interface
                   const wrappedDataStream = {
                     ...dataStream,
                     onError: (error: unknown) => {
@@ -356,34 +343,38 @@ export async function POST(request: Request) {
                     },
                   };
 
-                  // Execute the appropriate tool
                   switch (toolCall.name) {
-                    case "getWeather":
+                    case "getWeather": {
                       result = await (getWeather.execute as any)(args, toolContext);
                       break;
-                    case "createDocument":
+                    }
+                    case "createDocument": {
                       const createDocTool = createDocument({
                         session,
                         dataStream: wrappedDataStream as any,
                       });
                       result = await (createDocTool.execute as any)(args, toolContext);
                       break;
-                    case "updateDocument":
+                    }
+                    case "updateDocument": {
                       const updateDocTool = updateDocument({
                         session,
                         dataStream: wrappedDataStream as any,
                       });
                       result = await (updateDocTool.execute as any)(args, toolContext);
                       break;
-                    case "requestSuggestions":
+                    }
+                    case "requestSuggestions": {
                       const suggestTool = requestSuggestions({
                         session,
                         dataStream: wrappedDataStream as any,
                       });
                       result = await (suggestTool.execute as any)(args, toolContext);
                       break;
-                    default:
+                    }
+                    default: {
                       result = { error: `Unknown tool: ${toolCall.name}` };
+                    }
                   }
 
                   toolResults.push({
@@ -392,24 +383,22 @@ export async function POST(request: Request) {
                     content: JSON.stringify(result),
                   });
                 } catch (error) {
-                  // If tool execution fails, report the error
                   toolResults.push({
                     tool_call_id: toolCall.id,
                     role: "tool",
                     content: JSON.stringify({
-                      error: error instanceof Error ? error.message : "Tool execution failed",
+                      error:
+                        error instanceof Error ? error.message : "Tool execution failed",
                     }),
                   });
                 }
               }
 
-              // Build continuation messages with tool results
               const systemMessage = {
                 role: "system" as const,
                 content: systemPrompt({ selectedChatModel, requestHints }),
               };
 
-              // Create assistant message with tool calls
               const assistantToolMessage: ChatCompletionMessageParam = {
                 role: "assistant" as const,
                 tool_calls: Array.from(currentToolCalls.values()).map((tc) => ({
@@ -422,7 +411,6 @@ export async function POST(request: Request) {
                 })),
               };
 
-              // Make continuation call with tool results
               const continuationMessages: ChatCompletionMessageParam[] = [
                 systemMessage,
                 ...openaiMessages,
@@ -437,17 +425,14 @@ export async function POST(request: Request) {
                 tools: toolDefinitions,
               });
 
-              // Reset tool calls for potential multi-turn
               currentToolCalls.clear();
 
-              // Stream the continuation response
               for await (const continuationChunk of continuationStream) {
                 const continuationChoice = continuationChunk.choices[0];
                 if (!continuationChoice) continue;
 
                 const continuationDelta = continuationChoice.delta;
 
-                // Handle text content from continuation
                 if (continuationDelta.content) {
                   dataStream.write({
                     type: "text-part",
@@ -455,7 +440,6 @@ export async function POST(request: Request) {
                   });
                 }
 
-                // Handle potential additional tool calls (multi-turn)
                 if (continuationDelta.tool_calls) {
                   for (const toolCall of continuationDelta.tool_calls) {
                     const index = toolCall.index;
@@ -473,8 +457,6 @@ export async function POST(request: Request) {
                   }
                 }
 
-                // If continuation also needs tools, signal to UI
-                // (Full multi-turn will be handled in Phase 5 with approval UI)
                 if (
                   continuationChoice.finish_reason === "tool_calls" &&
                   currentToolCalls.size > 0
@@ -556,125 +538,7 @@ export async function POST(request: Request) {
           try {
             const streamContext = getStreamContext();
             if (streamContext) {
-              const streamId = generateId();
-              await createStreamId({ streamId, chatId: id });
-              await streamContext.createNewResumableStream(
-                streamId,
-                () => sseStream
-              );
-            }
-          } catch (_) {
-            // ignore redis errors
-          }
-        },
-      });
-    } else {
-      // FALLBACK TO LEGACY VERCEL AI SDK
-      const {
-        convertToModelMessages,
-        createUIMessageStream,
-        createUIMessageStreamResponse,
-        streamText,
-        stepCountIs,
-      } = await import("ai");
-
-      const modelMessages = await convertToModelMessages(uiMessages);
-
-      const stream = createUIMessageStream({
-        originalMessages: isToolApprovalFlow ? uiMessages : undefined,
-        execute: async ({ writer: dataStream }) => {
-          const result = streamText({
-            model,
-            system: systemPrompt({ selectedChatModel, requestHints }),
-            messages: modelMessages,
-            stopWhen: stepCountIs(5),
-            experimental_activeTools: isReasoningModel
-              ? []
-              : [
-                  "getWeather",
-                  "createDocument",
-                  "updateDocument",
-                  "requestSuggestions",
-                ],
-            providerOptions: isReasoningModel
-              ? {
-                  anthropic: {
-                    thinking: { type: "enabled", budgetTokens: 10_000 },
-                  },
-                }
-              : undefined,
-            tools: {
-              getWeather,
-              createDocument: createDocument({ session, dataStream }),
-              updateDocument: updateDocument({ session, dataStream }),
-              requestSuggestions: requestSuggestions({ session, dataStream }),
-            },
-            experimental_telemetry: {
-              isEnabled: isProductionEnvironment,
-              functionId: "stream-text",
-            },
-          });
-
-          dataStream.merge(result.toUIMessageStream({ sendReasoning: true }));
-
-          if (titlePromise) {
-            const title = await titlePromise;
-            dataStream.write({ type: "data-chat-title", data: title });
-            updateChatTitleById({ chatId: id, title });
-          }
-        },
-        generateId: generateUUID,
-        onFinish: async ({ messages: finishedMessages }) => {
-          if (isToolApprovalFlow) {
-            for (const finishedMsg of finishedMessages) {
-              const existingMsg = uiMessages.find((m) => m.id === finishedMsg.id);
-              if (existingMsg) {
-                await updateMessage({
-                  id: finishedMsg.id,
-                  parts: finishedMsg.parts,
-                  chatId: id,
-                });
-              } else {
-                await saveMessages({
-                  messages: [
-                    {
-                      id: finishedMsg.id,
-                      role: finishedMsg.role,
-                      parts: finishedMsg.parts,
-                      createdAt: new Date(),
-                      attachments: [],
-                      chatId: id,
-                    },
-                  ],
-                });
-              }
-            }
-          } else if (finishedMessages.length > 0) {
-            await saveMessages({
-              messages: finishedMessages.map((currentMessage) => ({
-                id: currentMessage.id,
-                role: currentMessage.role,
-                parts: currentMessage.parts,
-                createdAt: new Date(),
-                attachments: [],
-                chatId: id,
-              })),
-            });
-          }
-        },
-        onError: () => "Oops, an error occurred!",
-      });
-
-      return createUIMessageStreamResponse({
-        stream,
-        async consumeSseStream({ stream: sseStream }) {
-          if (!process.env.REDIS_URL) {
-            return;
-          }
-          try {
-            const streamContext = getStreamContext();
-            if (streamContext) {
-              const streamId = generateId();
+              const streamId = generateUUID();
               await createStreamId({ streamId, chatId: id });
               await streamContext.createNewResumableStream(
                 streamId,
@@ -687,6 +551,14 @@ export async function POST(request: Request) {
         },
       });
     }
+
+    return new Response(
+      JSON.stringify({
+        error:
+          "Azure AI Foundry is not configured for this user. Please add a Foundry project in Settings.",
+      }),
+      { status: 500, headers: { "Content-Type": "application/json" } }
+    );
   } catch (error) {
     const vercelId = request.headers.get("x-vercel-id");
 

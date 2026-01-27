@@ -1,4 +1,4 @@
-import { Output, streamText, tool, type UIMessageStreamWriter } from "ai";
+import { tool, type UIMessageStreamWriter } from "ai";
 import type { FirebaseSession as Session } from "@/lib/firebase/types";
 import { z } from "zod";
 import { getDocumentById, saveSuggestions } from "@/lib/firebase/queries";
@@ -6,6 +6,7 @@ import type { Suggestion } from "@/lib/firebase/queries";
 import type { ChatMessage } from "@/lib/types";
 import { generateUUID } from "@/lib/utils";
 import { getArtifactModel } from "../providers";
+import { streamFoundryObject } from "@/lib/azure-foundry/streaming";
 
 type RequestSuggestionsProps = {
   session: Session;
@@ -40,30 +41,31 @@ export const requestSuggestions = ({
         "userId" | "createdAt" | "documentCreatedAt"
       >[] = [];
 
-      const { partialOutputStream } = streamText({
-        model: await getArtifactModel(session.user.id),
+      const { client, deployment } = (await getArtifactModel(
+        session.user.id
+      )) as any;
+
+      const stream = streamFoundryObject<{
+        suggestions: Array<{
+          originalSentence: string;
+          suggestedSentence: string;
+          description: string;
+        }>;
+      }>({
+        client,
+        deployment,
         system:
-          "You are a help writing assistant. Given a piece of writing, please offer suggestions to improve the piece of writing and describe the change. It is very important for the edits to contain full sentences instead of just words. Max 5 suggestions.",
+          "You are a help writing assistant. Given a piece of writing, please offer suggestions to improve the piece of writing and describe the change. It is very important for the edits to contain full sentences instead of just words. Max 5 suggestions.\n\nReturn a JSON object with a 'suggestions' array. Each item must have: originalSentence, suggestedSentence, description.",
         prompt: document.content,
-        output: Output.array({
-          element: z.object({
-            originalSentence: z.string().describe("The original sentence"),
-            suggestedSentence: z.string().describe("The suggested sentence"),
-            description: z
-              .string()
-              .describe("The description of the suggestion"),
-          }),
-        }),
       });
 
-      let processedCount = 0;
-      for await (const partialOutput of partialOutputStream) {
-        if (!partialOutput) {
-          continue;
-        }
+      for await (const delta of stream) {
+        if (delta.type !== "object") continue;
 
-        for (let i = processedCount; i < partialOutput.length; i++) {
-          const element = partialOutput[i];
+        const items = delta.object?.suggestions;
+        if (!Array.isArray(items)) continue;
+
+        for (const element of items) {
           if (
             !element?.originalSentence ||
             !element?.suggestedSentence ||
@@ -88,7 +90,6 @@ export const requestSuggestions = ({
           });
 
           suggestions.push(suggestion);
-          processedCount++;
         }
       }
 

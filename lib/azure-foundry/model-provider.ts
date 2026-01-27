@@ -50,8 +50,9 @@ export async function getFoundryLanguageModel(
       if (deployments.length > 0) {
         deployment = deployments[0].deploymentName;
       } else {
-        // Fallback to a common model name
-        deployment = "gpt-4o";
+        throw new Error(
+          "No Foundry deployments configured. Add a deployment in Settings → Foundry → Deployments."
+        );
       }
     }
   }
@@ -78,31 +79,9 @@ export async function getFoundryTitleModel(
 
   const client = await getOpenAIClient(project.endpoint, project.apiKey);
 
-  // Try to find a fast model for titles
   const deployments = await getProjectDeployments(project.id);
 
-  // Preferred fast models for title generation (in order of preference)
-  const preferredModels = [
-    "gpt-4o-mini",
-    "gpt-35-turbo",
-    "gpt-3.5-turbo",
-    "gpt-4o",
-  ];
-
-  // Try to find a preferred model
-  for (const preferredModel of preferredModels) {
-    const found = deployments.find(
-      (d) =>
-        d.deploymentName.includes(preferredModel) ||
-        d.modelName?.includes(preferredModel)
-    );
-
-    if (found) {
-      return { client, deployment: found.deploymentName };
-    }
-  }
-
-  // Fallback to default or first deployment
+  // Use default deployment if configured, otherwise fall back to first deployment.
   const defaultDep = await getDefaultDeployment(project.id);
   if (defaultDep) {
     return { client, deployment: defaultDep.deploymentName };
@@ -112,8 +91,9 @@ export async function getFoundryTitleModel(
     return { client, deployment: deployments[0].deploymentName };
   }
 
-  // Ultimate fallback
-  return { client, deployment: "gpt-4o-mini" };
+  throw new Error(
+    "No Foundry deployments configured. Add a deployment in Settings → Foundry → Deployments."
+  );
 }
 
 /**

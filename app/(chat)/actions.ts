@@ -3,7 +3,7 @@
 import { cookies } from "next/headers";
 import type { VisibilityType } from "@/components/visibility-selector";
 import { titlePrompt } from "@/lib/ai/prompts";
-import { getTitleModel } from "@/lib/ai/providers";
+import { getTitleModel, type FoundryResolvedModel } from "@/lib/ai/providers";
 import { generateFoundryText } from "@/lib/azure-foundry/streaming";
 import {
   deleteMessagesByChatIdAfterTimestamp,
@@ -25,35 +25,19 @@ export async function generateTitleFromUserMessage({
   message: ChatMessage;
   userId?: string;
 }) {
-  // Get the Foundry model (returns { client, deployment })
-  const model = await getTitleModel(userId);
+  const resolved = await getTitleModel(userId);
 
-  // Extract Foundry client if available
-  const foundryClient = (model as any).__foundryClient;
-  const foundryDeployment = (model as any).__foundryDeployment;
+  // This app is configured for Foundry-only in non-test environments.
+  const { client, deployment } = resolved as FoundryResolvedModel;
 
-  let text: string;
+  const result = await generateFoundryText({
+    client,
+    deployment,
+    messages: [{ role: "user", content: getTextFromMessage(message) }],
+    system: titlePrompt,
+  });
 
-  if (foundryClient && foundryDeployment) {
-    // Use native OpenAI SDK via Foundry
-    const result = await generateFoundryText({
-      client: foundryClient,
-      deployment: foundryDeployment,
-      messages: [{ role: "user", content: getTextFromMessage(message) }],
-      system: titlePrompt,
-    });
-    text = result.text;
-  } else {
-    // Fallback to legacy model system
-    // This uses Vercel AI SDK temporarily until all users migrate
-    const { generateText } = await import("ai");
-    const result = await generateText({
-      model,
-      system: titlePrompt,
-      prompt: getTextFromMessage(message),
-    });
-    text = result.text;
-  }
+  const text = result.text;
 
   return text
     .replace(/^[#*"\s]+/, "")

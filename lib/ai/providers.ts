@@ -1,41 +1,12 @@
-import { createOpenAI } from "@ai-sdk/openai";
-import {
-  customProvider,
-  extractReasoningMiddleware,
-  wrapLanguageModel,
-} from "ai";
+import { customProvider } from "ai";
 import { isTestEnvironment } from "../constants";
-import {
-  getUserLanguageModel,
-  getUserAIModels,
-  getDefaultModel,
-} from "./dynamic-providers";
+import { DEFAULT_CHAT_MODEL } from "./models";
 import {
   getFoundryLanguageModel,
   getFoundryTitleModel,
   getFoundryArtifactModel,
   hasFoundryProject,
 } from "@/lib/azure-foundry/model-provider";
-
-const THINKING_SUFFIX_REGEX = /-thinking$/;
-
-// Azure OpenAI configuration (legacy fallback)
-const AZURE_OPENAI_API_KEY = process.env.AZURE_OPENAI_API_KEY;
-const AZURE_OPENAI_ENDPOINT = process.env.AZURE_OPENAI_ENDPOINT;
-
-// Check if Azure OpenAI is configured (legacy fallback option)
-const isAzureConfigured = !!(AZURE_OPENAI_API_KEY && AZURE_OPENAI_ENDPOINT);
-
-// Initialize Azure OpenAI client if configured (legacy fallback)
-const azureOpenAI = isAzureConfigured
-  ? createOpenAI({
-      apiKey: AZURE_OPENAI_API_KEY,
-      baseURL: `${AZURE_OPENAI_ENDPOINT}/openai/v1`,
-      headers: {
-        "api-key": AZURE_OPENAI_API_KEY,
-      },
-    })
-  : null;
 
 export const myProvider = isTestEnvironment
   ? (() => {
@@ -56,217 +27,92 @@ export const myProvider = isTestEnvironment
     })()
   : null;
 
+export type FoundryResolvedModel = {
+  client: any;
+  deployment: string;
+};
+
+type TestLanguageModel = typeof myProvider extends {
+  languageModels: Record<string, infer LM>;
+}
+  ? LM
+  : never;
+
 /**
- * Get language model based on configuration priority:
- * 1. Test environment mock models
- * 2. User's Azure AI Foundry project (NEW - PRIMARY)
- * 3. User's configured models from Firestore (OLD - deprecated)
- * 4. Azure OpenAI from .env (fallback)
- * 5. Error if no models available
+ * Resolve a Foundry model for chat.
+ *
+ * NOTE: This project is being cleaned to Foundry-only; legacy multi-provider
+ * support and environment fallbacks have been removed.
  */
-export async function getLanguageModel(modelId: string, userId?: string) {
+export async function getLanguageModel(
+  modelId: string,
+  userId?: string
+): Promise<FoundryResolvedModel | TestLanguageModel> {
   if (isTestEnvironment && myProvider) {
-    return myProvider.languageModel(modelId);
+    return myProvider.languageModel(modelId) as TestLanguageModel;
   }
 
-  const isReasoningModel =
-    modelId.includes("reasoning") || modelId.endsWith("-thinking");
-
-  // NEW: Try Azure AI Foundry first (if user has a project configured)
-  if (userId) {
-    try {
-      const hasFoundry = await hasFoundryProject(userId);
-
-      if (hasFoundry) {
-        // User has Foundry project - use it
-        const { client, deployment } = await getFoundryLanguageModel(
-          userId,
-          modelId
-        );
-
-        // Create a compatibility wrapper for Vercel AI SDK
-        // This allows existing streamText() calls to work until Phase 3
-        const foundryModel = createOpenAI({
-          apiKey: "foundry", // Placeholder - actual auth handled by Foundry client
-        })(deployment);
-
-        // Inject the actual Foundry client for use in Phase 3+
-        (foundryModel as any).__foundryClient = client;
-        (foundryModel as any).__foundryDeployment = deployment;
-
-        if (isReasoningModel) {
-          return wrapLanguageModel({
-            model: foundryModel,
-            middleware: extractReasoningMiddleware({ tagName: "thinking" }),
-          });
-        }
-
-        return foundryModel;
-      }
-    } catch (error) {
-      console.error("Failed to load Foundry model:", error);
-      // Fall through to old system
-    }
+  if (!userId) {
+    throw new Error(
+      "Missing userId. Azure AI Foundry requires a user-scoped project configuration."
+    );
   }
 
-  // OLD: Try to load from user's configured models (DEPRECATED)
-  if (userId) {
-    try {
-      const model = await getUserLanguageModel(userId, modelId);
-
-      if (isReasoningModel) {
-        return wrapLanguageModel({
-          model,
-          middleware: extractReasoningMiddleware({ tagName: "thinking" }),
-        });
-      }
-
-      return model;
-    } catch (error) {
-      // If user has models configured but this specific one failed, throw error
-      const userModels = await getUserAIModels(userId);
-      if (userModels.length > 0) {
-        throw new Error(
-          `Model not found. Please select a valid model from your configured models in Settings.`
-        );
-      }
-
-      console.warn(`No user models configured, checking fallback options`);
-    }
+  const hasFoundry = await hasFoundryProject(userId);
+  if (!hasFoundry) {
+    throw new Error(
+      "No Azure AI Foundry project configured. Please add a Foundry project in Settings."
+    );
   }
 
-  // Fallback to Azure OpenAI from .env (only if user has no configured models)
-  if (azureOpenAI) {
-    const azureModelId = modelId.includes("/")
-      ? modelId.split("/")[1]
-      : modelId;
+  // If the UI hasn't selected a deployment yet, use the user's default.
+  // We also treat legacy cookie values (provider-prefixed) as "use default".
+  const shouldUseDefaultDeployment =
+    !modelId ||
+    modelId === DEFAULT_CHAT_MODEL ||
+    modelId.includes("/");
 
-    const cleanModelId = azureModelId.replace(THINKING_SUFFIX_REGEX, "");
-
-    if (isReasoningModel) {
-      return wrapLanguageModel({
-        model: azureOpenAI(cleanModelId),
-        middleware: extractReasoningMiddleware({ tagName: "thinking" }),
-      });
-    }
-
-    return azureOpenAI(cleanModelId);
-  }
-
-  throw new Error(
-    `No AI models configured. Please add an Azure AI Foundry project in Settings, or configure AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT in your environment.`
-  );
+  return getFoundryLanguageModel(userId, shouldUseDefaultDeployment ? undefined : modelId);
 }
 
-export async function getTitleModel(userId?: string) {
+export async function getTitleModel(userId?: string): Promise<FoundryResolvedModel | TestLanguageModel> {
   if (isTestEnvironment && myProvider) {
-    return myProvider.languageModel("title-model");
+    return myProvider.languageModel("title-model") as TestLanguageModel;
   }
 
-  // NEW: Try Azure AI Foundry first
-  if (userId) {
-    try {
-      const hasFoundry = await hasFoundryProject(userId);
-
-      if (hasFoundry) {
-        const { client, deployment } = await getFoundryTitleModel(userId);
-
-        const foundryModel = createOpenAI({
-          apiKey: "foundry",
-        })(deployment);
-
-        (foundryModel as any).__foundryClient = client;
-        (foundryModel as any).__foundryDeployment = deployment;
-
-        return foundryModel;
-      }
-    } catch (error) {
-      console.error("Failed to load Foundry title model:", error);
-    }
+  if (!userId) {
+    throw new Error(
+      "Missing userId. Azure AI Foundry requires a user-scoped project configuration."
+    );
   }
 
-  // OLD: Try to use user's first available fast model (DEPRECATED)
-  if (userId) {
-    try {
-      const models = await getUserAIModels(userId);
-      const fastModel =
-        models.find(
-          (m) =>
-            m.modelId.toLowerCase().includes("mini") ||
-            m.modelId.toLowerCase().includes("flash") ||
-            m.modelId.toLowerCase().includes("turbo")
-        ) || models[0];
-
-      if (fastModel) {
-        return await getUserLanguageModel(userId, fastModel.id);
-      }
-    } catch (error) {
-      console.warn(
-        "Failed to load user model for titles, checking fallback:",
-        error
-      );
-    }
+  const hasFoundry = await hasFoundryProject(userId);
+  if (!hasFoundry) {
+    throw new Error(
+      "No Azure AI Foundry project configured. Please add a Foundry project in Settings."
+    );
   }
 
-  // Fallback to Azure OpenAI from .env
-  if (azureOpenAI) {
-    return azureOpenAI("gpt-4o-mini");
-  }
-
-  throw new Error(
-    `No AI models configured for title generation. Please add an Azure AI Foundry project in Settings.`
-  );
+  return getFoundryTitleModel(userId);
 }
 
-export async function getArtifactModel(userId?: string) {
+export async function getArtifactModel(userId?: string): Promise<FoundryResolvedModel | TestLanguageModel> {
   if (isTestEnvironment && myProvider) {
-    return myProvider.languageModel("artifact-model");
+    return myProvider.languageModel("artifact-model") as TestLanguageModel;
   }
 
-  // NEW: Try Azure AI Foundry first
-  if (userId) {
-    try {
-      const hasFoundry = await hasFoundryProject(userId);
-
-      if (hasFoundry) {
-        const { client, deployment } = await getFoundryArtifactModel(userId);
-
-        const foundryModel = createOpenAI({
-          apiKey: "foundry",
-        })(deployment);
-
-        (foundryModel as any).__foundryClient = client;
-        (foundryModel as any).__foundryDeployment = deployment;
-
-        return foundryModel;
-      }
-    } catch (error) {
-      console.error("Failed to load Foundry artifact model:", error);
-    }
+  if (!userId) {
+    throw new Error(
+      "Missing userId. Azure AI Foundry requires a user-scoped project configuration."
+    );
   }
 
-  // OLD: Try to use user's default or first available capable model (DEPRECATED)
-  if (userId) {
-    try {
-      const defaultModel = await getDefaultModel(userId);
-
-      if (defaultModel) {
-        return await getUserLanguageModel(userId, defaultModel.id);
-      }
-    } catch (error) {
-      console.warn(
-        "Failed to load user model for artifacts, checking fallback:",
-        error
-      );
-    }
+  const hasFoundry = await hasFoundryProject(userId);
+  if (!hasFoundry) {
+    throw new Error(
+      "No Azure AI Foundry project configured. Please add a Foundry project in Settings."
+    );
   }
 
-  // Fallback to Azure OpenAI from .env
-  if (azureOpenAI) {
-    return azureOpenAI("gpt-4o");
-  }
-
-  throw new Error(
-    `No AI models configured for artifacts. Please add an Azure AI Foundry project in Settings.`
-  );
+  return getFoundryArtifactModel(userId);
 }

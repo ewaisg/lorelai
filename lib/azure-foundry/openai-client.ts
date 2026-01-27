@@ -1,58 +1,79 @@
 /**
- * OpenAI client factory for Azure AI Foundry
- * Creates direct connections to Azure OpenAI
+ * OpenAI client factory for Microsoft Foundry Models (models-only).
+ *
+ * Uses the OpenAI Azure client so API key auth works.
+ * The Settings UI stores a per-user endpoint + apiKey. The endpoint may be:
+ * - Resource endpoint: https://<resource>.services.ai.azure.com
+ * - Project endpoint:  https://<resource>.services.ai.azure.com/api/projects/<project>
+ *
+ * For model inference, we normalize project endpoints to the resource host.
  */
 
+import { DefaultAzureCredential, getBearerTokenProvider } from "@azure/identity";
 import { AzureOpenAI } from "openai";
 
+function normalizeFoundryResourceEndpoint(endpoint: string): string {
+  const trimmed = endpoint.trim().replace(/\/+$/, "");
+  const projectIdx = trimmed.indexOf("/api/projects/");
+  if (projectIdx !== -1) {
+    return trimmed.slice(0, projectIdx);
+  }
+  // If user provided an OpenAI v1 base URL already, try to normalize back to resource host.
+  // Examples: https://<resource>.services.ai.azure.com/openai/v1/
+  //           https://<resource>.openai.azure.com/openai/v1/
+  return trimmed
+    .replace(/\/openai\/v1\/?$/i, "")
+    .replace(/\/openai\/?$/i, "");
+}
+
 /**
- * Get an OpenAI client for Azure OpenAI
+ * Get an OpenAI client configured for Foundry Models.
  *
- * This creates a direct connection to Azure OpenAI, bypassing the Foundry SDK routing
- * which has known issues with the api-version query parameter.
- *
- * @param projectEndpoint - Full project endpoint (e.g., https://resource.services.ai.azure.com/api/projects/project-name)
- * @param apiKey - API key for authentication
- * @returns OpenAI client instance configured for Azure
+ * @param endpoint - Foundry resource or project endpoint.
+ * @param apiKey - Optional API key. If omitted, uses Entra ID token provider.
  */
-export async function getOpenAIClient(
-  projectEndpoint: string,
-  apiKey?: string
-) {
+export async function getOpenAIClient(endpoint: string, apiKey?: string) {
+  if (!endpoint) {
+    throw new Error("Missing Foundry endpoint. Please configure it in Settings.");
+  }
+
+  if (apiKey !== undefined && typeof apiKey !== "string") {
+    throw new Error(
+      "Invalid Foundry apiKey value stored for this user. Please re-save your Foundry Settings."
+    );
+  }
+
+  const cleanedApiKey = apiKey?.trim();
+
+  const resourceEndpoint = normalizeFoundryResourceEndpoint(endpoint);
+
+  // This matches the Foundry Models docs examples.
+  const apiVersion = process.env.OPENAI_API_VERSION || "2024-10-21";
+
   try {
-    // Extract the Azure resource endpoint from the project endpoint
-    // Format: https://resource-name.services.ai.azure.com/api/projects/project-name
-    // We need: https://resource-name.openai.azure.com
-    const url = new URL(projectEndpoint);
-    const hostname = url.hostname;
-
-    // Extract resource name from hostname
-    // Format: resource-name.services.ai.azure.com -> resource-name
-    const resourceName = hostname.split('.')[0];
-
-    // Construct Azure OpenAI endpoint
-    const azureEndpoint = `https://${resourceName}.openai.azure.com`;
-
-    if (!apiKey) {
-      throw new Error(
-        "API key is required for Azure OpenAI connection. Please configure your Foundry project with an API key."
-      );
+    if (cleanedApiKey) {
+      return new AzureOpenAI({
+        endpoint: resourceEndpoint,
+        apiKey: cleanedApiKey,
+        apiVersion,
+      });
     }
 
-    // Create Azure OpenAI client
-    const openaiClient = new AzureOpenAI({
-      apiKey,
-      endpoint: azureEndpoint,
-      apiVersion: "2024-12-01-preview",
+    // Keyless auth (Entra ID) - optional.
+    const tokenProvider = getBearerTokenProvider(
+      new DefaultAzureCredential(),
+      "https://cognitiveservices.azure.com/.default"
+    );
+
+    return new AzureOpenAI({
+      endpoint: resourceEndpoint,
+      azureADTokenProvider: tokenProvider,
+      apiVersion,
     });
-
-    console.log("Azure OpenAI client created with endpoint:", azureEndpoint);
-
-    return openaiClient;
   } catch (error) {
-    console.error("Failed to create Azure OpenAI client:", error);
+    console.error("Failed to create Foundry OpenAI client:", error);
     throw new Error(
-      `Failed to initialize OpenAI client: ${error instanceof Error ? error.message : "Unknown error"}`
+      `Failed to initialize Foundry OpenAI client: ${error instanceof Error ? error.message : "Unknown error"}`
     );
   }
 }

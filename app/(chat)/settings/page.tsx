@@ -7,7 +7,7 @@ export default function SettingsPage() {
       <div className="border-b border-border px-6 py-4">
         <h1 className="text-2xl font-semibold">Settings</h1>
         <p className="text-sm text-muted-foreground">
-          Manage your AI providers, models, and preferences
+          Configure Azure AI Foundry and preferences
         </p>
       </div>
       <Suspense fallback={<div className="flex-1 p-6">Loading settings...</div>}>

@@ -319,10 +319,17 @@ export async function* streamFoundryObject<T = any>(options: {
     maxTokens,
   } = options;
 
+  // Some providers enforce that at least one message explicitly mentions "json"
+  // when using response_format: { type: "json_object" }.
+  const jsonRequirement =
+    "Return a valid json object. Respond with json only (no markdown, no extra text).";
+
   // Build messages
   const messages: ChatCompletionMessageParam[] = [];
   if (system) {
-    messages.push({ role: "system", content: system });
+    messages.push({ role: "system", content: `${jsonRequirement}\n\n${system}` });
+  } else {
+    messages.push({ role: "system", content: jsonRequirement });
   }
   if (inputMessages) {
     messages.push(...inputMessages);

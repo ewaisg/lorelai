@@ -15,25 +15,35 @@ const FOUNDRY_DEPLOYMENTS_COLLECTION = "foundryDeployments";
 export async function getUserFoundryProject(
   userId: string
 ): Promise<FoundryProject | null> {
+  // Avoid composite index requirements by not combining filters + orderBy.
+  // We fetch and pick the newest enabled project in-memory.
   const snapshot = await adminDb
     .collection(FOUNDRY_PROJECTS_COLLECTION)
     .where("userId", "==", userId)
-    .where("enabled", "==", true)
-    .orderBy("createdAt", "desc")
-    .limit(1)
     .get();
 
-  if (snapshot.empty) {
-    return null;
-  }
+  if (snapshot.empty) return null;
 
-  const doc = snapshot.docs[0];
-  return {
-    id: doc.id,
-    ...doc.data(),
-    createdAt: doc.data().createdAt?.toDate(),
-    updatedAt: doc.data().updatedAt?.toDate(),
-  } as FoundryProject;
+  const projects = snapshot.docs.map((doc) => {
+    const data = doc.data();
+    return {
+      id: doc.id,
+      ...data,
+      createdAt: data.createdAt?.toDate?.() ?? undefined,
+      updatedAt: data.updatedAt?.toDate?.() ?? undefined,
+    } as FoundryProject;
+  });
+
+  const enabledProjects = projects.filter((p) => p.enabled);
+  const candidates = enabledProjects.length > 0 ? enabledProjects : projects;
+
+  candidates.sort((a, b) => {
+    const aTime = a.createdAt ? a.createdAt.getTime() : 0;
+    const bTime = b.createdAt ? b.createdAt.getTime() : 0;
+    return bTime - aTime;
+  });
+
+  return candidates[0] ?? null;
 }
 
 /**
@@ -45,15 +55,25 @@ export async function getUserFoundryProjects(
   const snapshot = await adminDb
     .collection(FOUNDRY_PROJECTS_COLLECTION)
     .where("userId", "==", userId)
-    .orderBy("createdAt", "desc")
     .get();
 
-  return snapshot.docs.map((doc) => ({
-    id: doc.id,
-    ...doc.data(),
-    createdAt: doc.data().createdAt?.toDate(),
-    updatedAt: doc.data().updatedAt?.toDate(),
-  })) as FoundryProject[];
+  const projects = snapshot.docs.map((doc) => {
+    const data = doc.data();
+    return {
+      id: doc.id,
+      ...data,
+      createdAt: data.createdAt?.toDate?.() ?? undefined,
+      updatedAt: data.updatedAt?.toDate?.() ?? undefined,
+    } as FoundryProject;
+  });
+
+  projects.sort((a, b) => {
+    const aTime = a.createdAt ? a.createdAt.getTime() : 0;
+    const bTime = b.createdAt ? b.createdAt.getTime() : 0;
+    return bTime - aTime;
+  });
+
+  return projects;
 }
 
 /**
@@ -62,8 +82,9 @@ export async function getUserFoundryProjects(
 export async function createFoundryProject(
   data: Omit<FoundryProject, "id" | "createdAt" | "updatedAt">
 ): Promise<string> {
+  const cleaned = removeUndefined({ ...data });
   const docRef = await adminDb.collection(FOUNDRY_PROJECTS_COLLECTION).add({
-    ...data,
+    ...cleaned,
     createdAt: FieldValue.serverTimestamp(),
     updatedAt: FieldValue.serverTimestamp(),
   });
@@ -78,11 +99,12 @@ export async function updateFoundryProject(
   projectId: string,
   data: Partial<Omit<FoundryProject, "id" | "userId" | "createdAt">>
 ): Promise<void> {
+  const cleaned = removeUndefined({ ...data });
   await adminDb
     .collection(FOUNDRY_PROJECTS_COLLECTION)
     .doc(projectId)
     .update({
-      ...data,
+      ...cleaned,
       updatedAt: FieldValue.serverTimestamp(),
     });
 }
@@ -115,7 +137,6 @@ export async function getProjectDeployments(
   const snapshot = await adminDb
     .collection(FOUNDRY_DEPLOYMENTS_COLLECTION)
     .where("projectId", "==", projectId)
-    .orderBy("createdAt", "desc")
     .get();
 
   return snapshot.docs.map((doc) => ({
@@ -124,6 +145,20 @@ export async function getProjectDeployments(
     createdAt: doc.data().createdAt?.toDate(),
     updatedAt: doc.data().updatedAt?.toDate(),
   })) as FoundryDeployment[];
+}
+
+/**
+ * Remove undefined values from an object for Firestore compatibility.
+ * Firestore doesn't accept undefined values, so we filter them out.
+ */
+function removeUndefined<T extends Record<string, any>>(obj: T): Partial<T> {
+  const result: Partial<T> = {};
+  for (const key in obj) {
+    if (obj[key] !== undefined) {
+      result[key] = obj[key];
+    }
+  }
+  return result;
 }
 
 /**
@@ -158,6 +193,8 @@ export async function getDefaultDeployment(
 export async function upsertDeployment(
   data: Omit<FoundryDeployment, "id" | "createdAt" | "updatedAt">
 ): Promise<string> {
+  const cleaned = removeUndefined({ ...data });
+
   // Check if deployment already exists
   const snapshot = await adminDb
     .collection(FOUNDRY_DEPLOYMENTS_COLLECTION)
@@ -169,14 +206,14 @@ export async function upsertDeployment(
     // Update existing deployment
     const existingDoc = snapshot.docs[0];
     await existingDoc.ref.update({
-      ...data,
+      ...cleaned,
       updatedAt: FieldValue.serverTimestamp(),
     });
     return existingDoc.id;
   } else {
     // Create new deployment
     const docRef = await adminDb.collection(FOUNDRY_DEPLOYMENTS_COLLECTION).add({
-      ...data,
+      ...cleaned,
       createdAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
     });

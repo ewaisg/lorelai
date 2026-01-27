@@ -27,11 +27,7 @@ import {
   ModelSelectorName,
   ModelSelectorTrigger,
 } from "@/components/ai-elements/model-selector";
-import {
-  chatModels as fallbackChatModels,
-  DEFAULT_CHAT_MODEL,
-  modelsByProvider as fallbackModelsByProvider,
-} from "@/lib/ai/models";
+import { DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
 import { useUserModels } from "@/hooks/use-user-models";
 import type { Attachment, ChatMessage } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -472,9 +468,8 @@ function PureModelSelectorCompact({
   const [open, setOpen] = useState(false);
   const { models: userModels, modelsByProvider: userModelsByProvider, loading } = useUserModels();
 
-  // Use user models if available, otherwise fall back to hardcoded models
-  const chatModels = userModels.length > 0 ? userModels : fallbackChatModels;
-  const modelsByProvider = userModels.length > 0 ? userModelsByProvider : fallbackModelsByProvider;
+  const chatModels = userModels;
+  const modelsByProvider = userModelsByProvider;
 
   const selectedModel =
     chatModels.find((m) => m.id === selectedModelId) ??
@@ -483,17 +478,6 @@ function PureModelSelectorCompact({
 
   // Extract provider from model for logo
   const provider = selectedModel?.provider || selectedModel?.id?.split("/")[0] || "";
-
-  // Provider display names for fallback models
-  const providerNames: Record<string, string> = {
-    anthropic: "Anthropic",
-    openai: "OpenAI",
-    google: "Google",
-    xai: "xAI",
-    reasoning: "Reasoning",
-    "azure-openai": "Azure OpenAI",
-    custom: "Custom",
-  };
 
   if (loading) {
     return (
@@ -524,11 +508,7 @@ function PureModelSelectorCompact({
         <ModelSelectorList>
           {Object.entries(modelsByProvider).map(
             ([providerKey, providerModels]) => {
-              // For user models, providerKey is the provider name (e.g., "My Azure OpenAI")
-              // For fallback models, providerKey is the provider type (e.g., "anthropic")
-              const heading = userModels.length > 0
-                ? providerKey
-                : (providerNames[providerKey] ?? providerKey);
+              const heading = providerKey;
 
               return (
                 <ModelSelectorGroup
