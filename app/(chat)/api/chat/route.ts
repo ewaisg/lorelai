@@ -47,7 +47,8 @@ function getStreamContext() {
 export { getStreamContext };
 
 /**
- * Convert UI messages to OpenAI format (simplified - text only)
+ * Convert UI messages to OpenAI format
+ * Supports text and image file attachments
  * Tool support will be added in Phase 4
  */
 function convertToOpenAIMessages(
@@ -57,16 +58,56 @@ function convertToOpenAIMessages(
 
   for (const msg of uiMessages) {
     if (msg.role === "user") {
-      // Combine all text parts
-      const textContent = msg.parts
-        .filter((p) => p.type === "text")
-        .map((p) => (p as any).text)
-        .join("\n");
+      // Check if message has file attachments (images)
+      const fileParts = msg.parts.filter((p) => p.type === "file");
+      const textParts = msg.parts.filter((p) => p.type === "text");
 
-      messages.push({
-        role: "user",
-        content: textContent,
-      });
+      // If there are file attachments, use array content format
+      if (fileParts.length > 0) {
+        const content: Array<{ type: string; text?: string; image_url?: { url: string } }> = [];
+
+        // Add text parts
+        for (const textPart of textParts) {
+          const text = (textPart as any).text;
+          if (text) {
+            content.push({
+              type: "text",
+              text: text,
+            });
+          }
+        }
+
+        // Add image parts
+        for (const filePart of fileParts) {
+          const url = (filePart as any).url;
+          const mediaType = (filePart as any).mediaType;
+
+          // Only process image files
+          if (mediaType?.startsWith("image/")) {
+            content.push({
+              type: "image_url",
+              image_url: {
+                url: url,
+              },
+            });
+          }
+        }
+
+        messages.push({
+          role: "user",
+          content: content as any,
+        });
+      } else {
+        // No attachments, use simple text format
+        const textContent = textParts
+          .map((p) => (p as any).text)
+          .join("\n");
+
+        messages.push({
+          role: "user",
+          content: textContent,
+        });
+      }
     } else if (msg.role === "assistant") {
       // For now, just extract text parts
       // Tool calls will be handled in Phase 4

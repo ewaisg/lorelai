@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useSWRConfig } from "swr";
 import { unstable_serialize } from "swr/infinite";
 import { initialArtifactData, useArtifact } from "@/hooks/use-artifact";
@@ -13,21 +13,33 @@ export function DataStreamHandler() {
   const { mutate } = useSWRConfig();
 
   const { artifact, setArtifact, setMetadata } = useArtifact();
+  const isProcessingRef = useRef(false);
 
   useEffect(() => {
-    if (!dataStream?.length) {
+    // Skip if no data or already processing
+    if (!dataStream?.length || isProcessingRef.current) {
       return;
     }
 
-    const newDeltas = dataStream.slice();
+    // Mark as processing to prevent race conditions
+    isProcessingRef.current = true;
+
+    // Extract deltas and clear the stream immediately
+    const deltas = dataStream.slice();
     setDataStream([]);
 
-    for (const delta of newDeltas) {
-      // Handle chat title updates
+    // Track if we need to mutate chat history
+    let shouldMutateChatHistory = false;
+
+    // Process all deltas
+    for (const delta of deltas) {
+      // Handle chat title updates (defer mutation until after state updates)
       if (delta.type === "data-chat-title") {
-        mutate(unstable_serialize(getChatHistoryPaginationKey));
+        shouldMutateChatHistory = true;
         continue;
       }
+
+      // Get artifact definition based on current artifact kind
       const artifactDefinition = artifactDefinitions.find(
         (currentArtifactDefinition) =>
           currentArtifactDefinition.kind === artifact.kind
@@ -86,7 +98,15 @@ export function DataStreamHandler() {
         }
       });
     }
-  }, [dataStream, setArtifact, setMetadata, artifact, setDataStream, mutate]);
+
+    // Mutate chat history after all state updates complete
+    if (shouldMutateChatHistory) {
+      mutate(unstable_serialize(getChatHistoryPaginationKey));
+    }
+
+    // Allow next batch
+    isProcessingRef.current = false;
+  }, [dataStream, setArtifact, setMetadata, artifact.kind, setDataStream, mutate]);
 
   return null;
 }

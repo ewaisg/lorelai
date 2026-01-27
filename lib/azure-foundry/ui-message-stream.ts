@@ -40,12 +40,15 @@ export function createFoundryUIMessageStream(
   let controller: ReadableStreamDefaultController;
   const messages: ChatMessage[] = [...originalMessages];
   let currentMessage: Partial<ChatMessage> | null = null;
+  let currentMessageId: string | null = null;
 
   const encoder = new TextEncoder();
 
   // Helper to write SSE-formatted data
-  const writeSSE = (event: string, data: any) => {
-    const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  // The Vercel AI SDK's parseJsonEventStream ignores the event field and only parses data
+  // So we need to include type in the data payload itself
+  const writeSSE = (data: any) => {
+    const payload = `data: ${JSON.stringify(data)}\n\n`;
     controller.enqueue(encoder.encode(payload));
   };
 
@@ -55,11 +58,17 @@ export function createFoundryUIMessageStream(
       switch (chunk.type) {
         case "text-part":
           if (!currentMessage) {
+            currentMessageId = generateId ? generateId() : crypto.randomUUID();
             currentMessage = {
-              id: generateId ? generateId() : crypto.randomUUID(),
+              id: currentMessageId,
               role: "assistant",
               parts: [{ type: "text", text: "" }],
             };
+            // Send text-start chunk
+            writeSSE({
+              type: "text-start",
+              id: currentMessageId,
+            });
           }
 
           // Append to current text part
@@ -68,39 +77,65 @@ export function createFoundryUIMessageStream(
             textPart.text += chunk.textPart;
           }
 
-          writeSSE("text-delta", { delta: chunk.textPart });
+          // Send text-delta chunk with required fields
+          writeSSE({
+            type: "text-delta",
+            id: currentMessageId,
+            delta: chunk.textPart,
+          });
           break;
 
         case "reasoning-part":
-          writeSSE("reasoning-delta", { delta: chunk.reasoningPart });
+          // Ensure we have a message ID for reasoning chunks
+          if (!currentMessageId) {
+            currentMessageId = generateId ? generateId() : crypto.randomUUID();
+          }
+          writeSSE({
+            type: "reasoning-delta",
+            id: currentMessageId,
+            delta: chunk.reasoningPart,
+          });
           break;
 
         // Tool support removed for Phase 3 - will be added in Phase 4
 
         case "data-chat-title":
-          writeSSE("data", {
-            type: "chat-title",
+          // Data chunks use data-${name} format
+          writeSSE({
+            type: "data-chat-title",
             data: chunk.data,
           });
           break;
 
         case "data-textDelta":
-          writeSSE("data", {
-            type: "textDelta",
+          writeSSE({
+            type: "data-textDelta",
             data: chunk.data,
             transient: chunk.transient,
           });
           break;
 
         case "finish":
+          // Send text-end chunk if we have a current message
+          if (currentMessageId) {
+            writeSSE({
+              type: "text-end",
+              id: currentMessageId,
+            });
+          }
+
           if (currentMessage && currentMessage.parts) {
             messages.push(currentMessage as ChatMessage);
           }
           currentMessage = null;
+          currentMessageId = null;
           break;
 
         case "error":
-          writeSSE("error", { error: chunk.error });
+          writeSSE({
+            type: "error",
+            error: chunk.error,
+          });
           break;
       }
     },
@@ -138,14 +173,20 @@ export function createFoundryUIMessageStream(
           await onFinish({ messages });
         }
 
-        // Send finish event
-        writeSSE("finish", { finishReason: "stop" });
+        // Send finish event with proper structure
+        writeSSE({
+          type: "finish",
+          finishReason: "stop",
+        });
         controller.close();
       } catch (error) {
         const errorMessage =
           onError?.(error as Error) || "An error occurred during streaming";
 
-        writeSSE("error", { error: errorMessage });
+        writeSSE({
+          type: "error",
+          error: errorMessage,
+        });
         controller.error(error);
       }
     },

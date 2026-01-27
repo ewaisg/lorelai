@@ -41,7 +41,8 @@ function PureMessages({
     status,
   });
 
-  useDataStream();
+  // Use dataStream to ensure component re-renders when new chunks arrive
+  const { dataStream } = useDataStream();
 
   return (
     <div className="relative flex-1">
